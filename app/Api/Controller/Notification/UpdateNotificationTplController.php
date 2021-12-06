@@ -18,59 +18,28 @@
 
 namespace App\Api\Controller\Notification;
 
-use App\Api\Serializer\NotificationTplSerializer;
 use App\Common\CacheKey;
+use App\Common\ResponseCode;
 use App\Models\NotificationTpl;
-use Discuz\Api\Controller\AbstractListController;
-use Discuz\Auth\AssertPermissionTrait;
-use Discuz\Auth\Exception\PermissionDeniedException;
-use Illuminate\Contracts\Validation\Factory;
 use Illuminate\Support\Arr;
 use Illuminate\Validation\ValidationException;
-use Psr\Http\Message\ServerRequestInterface;
 use RuntimeException;
-use Tobscure\JsonApi\Document;
+use Discuz\Base\DzqAdminController;
 
-class UpdateNotificationTplController extends AbstractListController
+class UpdateNotificationTplController extends DzqAdminController
 {
-    use AssertPermissionTrait;
+    use NotificationTrait;
 
-    /**
-     * {@inheritdoc}
-     */
-    public $serializer = NotificationTplSerializer::class;
-
-    /**
-     * @var Factory
-     */
-    protected $validation;
-    /**
-     * @var \Illuminate\Contracts\Foundation\Application|mixed
-     */
-    protected $cache;
-
-    /**
-     * @param Factory $validation
-     */
-    public function __construct(Factory $validation)
+    public function main()
     {
-        $this->validation = $validation;
-    }
+        $data = $this->inPut('data');
 
-    /**
-     * @param ServerRequestInterface $request
-     * @param Document $document
-     * @return mixed
-     * @throws PermissionDeniedException
-     */
-    protected function data(ServerRequestInterface $request, Document $document)
-    {
-        $actor = $request->getAttribute('actor');
-        $this->assertAdmin($actor);
+        if (empty($data)) {
+            $this->outPut(ResponseCode::INVALID_PARAMETER);
+        }
+        $this->checkData($data);
 
-        $data = Arr::pluck($request->getParsedBody()->get('data', []), 'attributes');
-
-        $tpl = NotificationTpl::query()->whereIn('id', Arr::pluck($data, 'id'))->get()->keyBy('id');
+        $tpl = NotificationTpl::query()->whereIn('id', array_column($data, 'id'))->get()->keyBy('id');
 
         collect($data)->map(function ($attributes) use ($tpl) {
             if ($notificationTpl = $tpl->get(Arr::get($attributes, 'id'))) {
@@ -78,7 +47,7 @@ class UpdateNotificationTplController extends AbstractListController
             }
         });
 
-        return $tpl;
+        $this->outPut(ResponseCode::SUCCESS, '', $this->camelData($this->getDefaultAttributes($tpl)));
     }
 
     /**
@@ -91,9 +60,9 @@ class UpdateNotificationTplController extends AbstractListController
     {
         switch ($notificationTpl->type) {
             case 0:
-                $this->validation->make($attributes, [
+                $this->dzqValidate($attributes, [
                     'title' => 'filled',
-                ])->validate();
+                ]);
 
                 if (Arr::has($attributes, 'title')) {
                     $notificationTpl->title = Arr::get($attributes, 'title');
@@ -104,15 +73,15 @@ class UpdateNotificationTplController extends AbstractListController
                 break;
             default:
                 if ($notificationTpl->status == 1) {
-                    $this->validation->make($attributes, [
-                        'template_id' => 'filled',
-                    ])->validate();
+                    $this->dzqValidate($attributes, [
+                        'templateId' => 'filled',
+                    ]);
                 }
 
-                if (Arr::has($attributes, 'template_id')) {
-                    $templateId = Arr::get($attributes, 'template_id');
+                if (Arr::has($attributes, 'templateId')) {
+                    $templateId = Arr::get($attributes, 'templateId');
                     if ($notificationTpl->template_id != $templateId) {
-                        $notificationTpl->template_id = Arr::get($attributes, 'template_id');
+                        $notificationTpl->template_id = Arr::get($attributes, 'templateId');
 
                         // 判断是否修改了小程序模板，清除小程序查询模板的缓存
                         if ($notificationTpl->type == NotificationTpl::MINI_PROGRAM_NOTICE) {
@@ -133,40 +102,65 @@ class UpdateNotificationTplController extends AbstractListController
             $notificationTpl->status = $status;
         }
 
-        if (isset($attributes['first_data'])) {
-            $notificationTpl->first_data = Arr::get($attributes, 'first_data');
+        if (isset($attributes['firstData'])) {
+            $notificationTpl->first_data = Arr::get($attributes, 'firstData');
         }
 
-        if (isset($attributes['keywords_data'])) {
+        if (isset($attributes['keywordsData'])) {
             $keywords = array_map(function ($keyword) {
                 return str_replace(',', '，', $keyword);
-            }, (array) Arr::get($attributes, 'keywords_data', []));
+            }, (array) Arr::get($attributes, 'keywordsData', []));
 
             $notificationTpl->keywords_data = implode(',', $keywords);
         }
 
-        if (isset($attributes['remark_data'])) {
-            $notificationTpl->remark_data = Arr::get($attributes, 'remark_data');
+        if (isset($attributes['remarkData'])) {
+            $notificationTpl->remark_data = Arr::get($attributes, 'remarkData');
         }
 
         if (isset($attributes['color'])) {
             $notificationTpl->color = Arr::get($attributes, 'color');
         }
 
-        if (isset($attributes['redirect_type'])) {
-            $notificationTpl->redirect_type = (int) Arr::get($attributes, 'redirect_type');
+        if (isset($attributes['redirectType'])) {
+            $notificationTpl->redirect_type = (int) Arr::get($attributes, 'redirectType');
         }
 
-        if (isset($attributes['redirect_url'])) {
-            $notificationTpl->redirect_url = Arr::get($attributes, 'redirect_url');
+        if (isset($attributes['redirectUrl'])) {
+            $notificationTpl->redirect_url = Arr::get($attributes, 'redirectUrl');
         }
 
-        if (isset($attributes['page_path'])) {
-            $notificationTpl->page_path = Arr::get($attributes, 'page_path');
+        if (isset($attributes['pagePath'])) {
+            $notificationTpl->page_path = Arr::get($attributes, 'pagePath');
+        }
+
+        if (isset($attributes['pushType'])) {
+            $notificationTpl->push_type = Arr::get($attributes, 'pushType');
+        }
+
+        if (isset($attributes['delayTime'])) {
+            $notificationTpl->delay_time = Arr::get($attributes, 'delayTime');
         }
 
         $notificationTpl->save();
 
         return $notificationTpl;
+    }
+
+    protected function checkData(&$data)
+    {
+        foreach ($data as $value) {
+            if ((isset($value['id']) && !is_numeric($value['id'])) ||
+                (isset($value['status']) && !is_numeric($value['status'])) ||
+                (isset($value['redirectType']) && !is_numeric($value['redirectType']))) {
+                $this->outPut(ResponseCode::INVALID_PARAMETER);
+            }
+        }
+        if (!empty($data[1]) && isset($data[1]['pushType']) && isset($data[1]['delayTime'])) {
+            $data[1]['pushType'] = $data[1]['pushType'] == NotificationTpl::PUSH_TYPE_DELAY ? NotificationTpl::PUSH_TYPE_DELAY : NotificationTpl::PUSH_TYPE_NOW;
+            $data[1]['delayTime'] = (int)abs($data[1]['delayTime']) <= NotificationTpl::MAX_DELAY_TIME ? (int)abs($data[1]['delayTime']) : NotificationTpl::MAX_DELAY_TIME;
+        }
+
+        return true;
     }
 }

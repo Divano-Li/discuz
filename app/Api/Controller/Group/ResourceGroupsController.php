@@ -18,52 +18,39 @@
 
 namespace App\Api\Controller\Group;
 
-use App\Api\Serializer\GroupSerializer;
+use App\Common\ResponseCode;
 use App\Repositories\GroupRepository;
-use Discuz\Api\Controller\AbstractResourceController;
-use Psr\Http\Message\ServerRequestInterface;
-use Tobscure\JsonApi\Document;
-use Tobscure\JsonApi\Exception\InvalidParameterException;
+use Discuz\Base\DzqAdminController;
 
-class ResourceGroupsController extends AbstractResourceController
+class ResourceGroupsController extends DzqAdminController
 {
-    /**
-     * {@inheritdoc}
-     */
-    public $serializer = GroupSerializer::class;
-
-    /**
-     * {@inheritdoc}
-     */
     public $optionalInclude = [
         'permission',
         'categoryPermissions',
     ];
 
-    /**
-     * {@inheritdoc}
-     *
-     * @throws InvalidParameterException
-     */
-    protected function data(ServerRequestInterface $request, Document $document)
+    public function main()
     {
-        $inputs = $request->getQueryParams();
-        $include = $this->extractInclude($request);
+        $id = $this->inPut('id');
 
-        $query = GroupRepository::query();
-
-        if (in_array('permission', $include)) {
-            // 是否包含分类权限
-            if (in_array('categoryPermissions', $include)) {
-                $query->with(['permission']);
-            } else {
-                $query->with(['permission' => function ($query) {
-                    $query->where('permission', 'not like', 'category%')
-                        ->where('permission', 'not like', 'switch.%');
-                }]);
-            }
+        if (!$id) {
+            $this->outPut(ResponseCode::RESOURCE_NOT_FOUND);
         }
 
-        return $query->where('id', $inputs['id'])->first();
+        $include = $this->inPut('include');
+        $query = GroupRepository::query();
+        $groupData = $query->where('id', $id)->first();
+        if (empty($groupData)) {
+            $this->outPut(ResponseCode::INVALID_PARAMETER, 'ID为'.$id.'记录不存在');
+        }
+        $include = [$include];
+        if (in_array('permission', $include)) {
+            $query->with(['permission']);
+        }
+
+        $result = $this->camelData($query->where('id', $id)->first());
+
+
+        $this->outPut(ResponseCode::SUCCESS, '', $result);
     }
 }

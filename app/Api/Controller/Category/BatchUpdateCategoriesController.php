@@ -18,77 +18,82 @@
 
 namespace App\Api\Controller\Category;
 
-use App\Api\Serializer\CategorySerializer;
-use App\Commands\Category\EditCategory;
-use Discuz\Api\Controller\AbstractListController;
-use Discuz\Auth\AssertPermissionTrait;
+use App\Common\CacheKey;
+use App\Models\AdminActionLog;
+use App\Models\Category;
+use App\Common\ResponseCode;
+use Discuz\Base\DzqAdminController;
+use App\Repositories\UserRepository;
 use Discuz\Auth\Exception\PermissionDeniedException;
-use Exception;
-use Illuminate\Contracts\Bus\Dispatcher;
-use Illuminate\Support\Str;
-use Illuminate\Validation\ValidationException;
-use Psr\Http\Message\ServerRequestInterface;
-use Tobscure\JsonApi\Document;
+use Discuz\Base\DzqCache;
 
-class BatchUpdateCategoriesController extends AbstractListController
+class BatchUpdateCategoriesController extends DzqAdminController
 {
-    use AssertPermissionTrait;
-
-    /**
-     * {@inheritdoc}
-     */
-    public $serializer = CategorySerializer::class;
-
-    /**
-     * @var Dispatcher
-     */
-    protected $bus;
-
-    /**
-     * @param Dispatcher $bus
-     */
-    public function __construct(Dispatcher $bus)
+    protected function checkRequestPermissions(UserRepository $userRepo)
     {
-        $this->bus = $bus;
+        if (!$this->user->isAdmin()) {
+            throw new PermissionDeniedException('您没有更新分类的权限');
+        }
+        return true;
     }
 
-    /**
-     * {@inheritdoc}
-     */
-    protected function data(ServerRequestInterface $request, Document $document)
+    public function main()
     {
-        $this->assertAdmin($request->getAttribute('actor'));
-        $actor = $request->getAttribute('actor');
-        $data = $request->getParsedBody()->get('data', []);
-        $ip = ip($request->getServerParams());
+        $data = $this->inPut('data');
+        $ip   = ip($this->request->getServerParams());
 
-        $meta = [];
+        // 批量添加的限制
+        if (count($data) > 100) {
+            $this->outPut(ResponseCode::INTERNAL_ERROR, '批量添加超过限制', '');
+        }
 
-        $categories = collect($data)
-            ->unique('id')
-            ->keyBy('id')
-            ->map(function ($category, $id) use ($actor, $ip, &$meta) {
-                try {
-                    return $this->bus->dispatch(
-                        new EditCategory($id, $actor, $category, $ip)
-                    );
-                } catch (ValidationException $e) {
-                    $meta[] = ['id' => $id, 'message' => $e->errors()];
-                } catch (Exception $e) {
-                    $meta[] = [
-                        'id' => $id,
-                        'message' => Str::of(get_class($e))
-                            ->afterLast('\\')
-                            ->beforeLast('Exception')
-                            ->snake()
-                            ->__toString(),
-                    ];
+        $resultData = [];
+        $validate = app('validator');
+        foreach ($data as $key => $value) {
+            try {
+                $validate->validate($value, [
+                    'id'            => 'required|int|min:1',
+                    'name'          => 'required|min:1|max:20',
+                    'sort'          => 'required|int',
+                    'description'   => 'sometimes|max:200'
+                ]);
+
+                $category = Category::query()->findOrFail($value['id']);
+                if (isset($value['name']) && $value['name'] != $category->name) {
+                    $oldName = $category->name;
+                    $category->name = $value['name'];
                 }
-            })
-            ->filter();
 
-        $document->setMeta($meta);
+                if (isset($value['description'])) {
+                    $category->description = $value['description'];
+                }
 
-        return $categories;
+                if (isset($value['sort'])) {
+                    $category->sort = $value['sort'];
+                }
+                $category->ip = $ip;
+                $category->save();
+                $resultData[] = $category;
+
+                if (isset($oldName)) {
+                    AdminActionLog::createAdminActionLog(
+                        $this->user->id,
+                        AdminActionLog::ACTION_OF_CATEGORY,
+                        '更新内容分类名称【'. $oldName .'】为【'. $category->name .'】'
+                    );
+                    unset($oldName);
+                }
+            } catch (\Exception $e) {
+                app('log')->info('requestId：' . $this->requestId . '-' . '修改内容分类 "' . $value['name'] . '" 出错： ' . $e->getMessage());
+                $this->outPut(ResponseCode::INTERNAL_ERROR, '修改出错', [$e->getMessage(), $value]);
+            }
+        }
+
+        $this->outPut(ResponseCode::SUCCESS, '', '');
+    }
+
+    public function suffixClearCache($user)
+    {
+        DzqCache::delKey(CacheKey::CATEGORIES);
     }
 }

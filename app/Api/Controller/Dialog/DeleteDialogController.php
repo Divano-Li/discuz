@@ -18,41 +18,50 @@
 
 namespace App\Api\Controller\Dialog;
 
-use App\Api\Serializer\DialogSerializer;
 use App\Commands\Dialog\DeleteDialog;
-use Discuz\Api\Controller\AbstractDeleteController;
+use App\Common\ResponseCode;
+use App\Models\Dialog;
+use App\Repositories\UserRepository;
+use Discuz\Base\DzqController;
 use Illuminate\Contracts\Bus\Dispatcher;
-use Illuminate\Support\Arr;
-use Psr\Http\Message\ServerRequestInterface;
-use Tobscure\JsonApi\Document;
 
-class DeleteDialogController extends AbstractDeleteController
+class DeleteDialogController extends DzqController
 {
-    public $serializer = DialogSerializer::class;
-
     /**
      * @var Dispatcher
      */
     protected $bus;
 
-    /**
-     * @param Dispatcher $bus
-     */
     public function __construct(Dispatcher $bus)
     {
         $this->bus = $bus;
     }
 
-    /**
-     * {@inheritdoc}
-     */
-    protected function delete(ServerRequestInterface $request)
+    protected function checkRequestPermissions(UserRepository $userRepo)
     {
-        $actor = $request->getAttribute('actor');
-        $id = Arr::get($request->getQueryParams(), 'id');
+        if ($this->user->isGuest()) {
+            $this->outPut(ResponseCode::JUMP_TO_LOGIN);
+        }
+        return true;
+    }
 
-        return $this->bus->dispatch(
-            new DeleteDialog($actor, $id)
-        );
+    public function main()
+    {
+        $user = $this->user;
+        $id = $this->inPut('id');
+        $dialogData = Dialog::query()->where('id', $id)->first();
+        if (empty($dialogData)) {
+            $this->outPut(ResponseCode::INVALID_PARAMETER);
+        }
+
+        try {
+            $this->bus->dispatch(
+                new DeleteDialog($user, $id)
+            );
+        } catch (\Exception $e) {
+            $this->outPut(ResponseCode::SUCCESS, $e->getMessage());
+        }
+
+        $this->outPut(ResponseCode::SUCCESS, '已删除');
     }
 }

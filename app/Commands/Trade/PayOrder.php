@@ -114,7 +114,7 @@ class PayOrder
         $this->setting = $setting;
         $this->url     = $url;
         $this->userWalletFailLogs = $userWalletFailLogs;
-        if(Arr::get($this->data, 'data.attributes')){
+        if (Arr::get($this->data, 'data.attributes')) {
             $this->data = collect(Arr::get($this->data, 'data.attributes'));
         }
 
@@ -165,7 +165,7 @@ class PayOrder
 
 
         if ($validator_info->fails()) {
-            app('payLog')->info("支付验证参数错误,订单号:{$this->order_sn},用户id:{$this->actor->id}" . "，错误信息：" . $validator_info);
+            app('payLog')->info("支付验证参数错误,订单号:{$this->order_sn},用户id:{$this->actor->id}" . '，错误信息：' . $validator_info);
             throw new ValidationException($validator_info);
         }
 
@@ -208,8 +208,8 @@ class PayOrder
                 // 站点有效期可为空，为空表示永久有效
 //                $site_expire = $this->setting->get('site_expire');
                 $site_price = $this->setting->get('site_price');
-                if(empty($site_price)){
-                    app('payLog')->info("站点续费settings表字段site_price必须大于0");
+                if (empty($site_price)) {
+                    app('payLog')->info('站点续费settings表字段site_price必须大于0');
                     throw new Exception(trans('order.not_find_site_expire_site_price'));
                 }
                 $order_info->body = trans('order.order_type_renew');
@@ -228,6 +228,9 @@ class PayOrder
                 break;
             case Order::ORDER_TYPE_MERGE:
                 $order_info->body = trans('order.order_type_merge');
+                break;
+            case Order::ORDER_TYPE_CHARGE:
+                $order_info->body = trans('order.site_charge');
                 break;
             default:
                 $order_info->body = '';
@@ -265,8 +268,7 @@ class PayOrder
             case Order::PAYMENT_TYPE_WECHAT_JS: //微信网页、公众号
             case Order::PAYMENT_TYPE_WECHAT_MINI: //微信小程序支付
                 $config = $this->setting->tag('wxpay'); //配置信息
-                // $config['notify_url'] = $this->url->to('/api/trade/notify/wechat');
-                $config['notify_url'] = $this->url->to('/apiv3/trade/notify/wechat');
+                $config['notify_url'] = $this->url->to('/api/trade/notify/wechat');
                 switch ($this->payment_type) {
                     case Order::PAYMENT_TYPE_WECHAT_NATIVE: //微信扫码支付
                         $pay_gateway          = GatewayConfig::WECAHT_PAY_NATIVE;

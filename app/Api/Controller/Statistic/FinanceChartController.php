@@ -18,21 +18,17 @@
 
 namespace App\Api\Controller\Statistic;
 
-use App\Api\Serializer\FinanceSerializer;
-use App\Commands\Statistic\FinanceChart;
+use App\Common\ResponseCode;
 use App\Models\Finance;
+use App\Repositories\FinanceRepository;
 use Carbon\Carbon;
-use Discuz\Api\Controller\AbstractListController;
+use Discuz\Auth\Exception\PermissionDeniedException;
+use Discuz\Base\DzqAdminController;
 use Illuminate\Contracts\Bus\Dispatcher;
-use Illuminate\Support\Arr;
-use Psr\Http\Message\ServerRequestInterface;
-use Tobscure\JsonApi\Document;
 
-class FinanceChartController extends AbstractListController
+class FinanceChartController extends DzqAdminController
 {
     const CREATE_AT_BEGIN = '-60 days'; //默认统计周期
-
-    public $serializer = FinanceSerializer::class;
 
     /**
      * @var Dispatcher
@@ -40,25 +36,77 @@ class FinanceChartController extends AbstractListController
     protected $bus;
 
     /**
-     * @param Dispatcher $bus
+     * @var FinanceRepository
      */
-    public function __construct(Dispatcher $bus)
+    private $finance;
+
+    /**
+     * @var int
+     */
+    private $type;
+
+    /**
+     * @var array|\ArrayAccess|mixed
+     */
+    private $createdAtBegin;
+
+    /**
+     * @var array|\ArrayAccess|mixed
+     */
+    private $createdAtEnd;
+
+    /**
+     * @param FinanceRepository $finance
+     */
+    public function __construct(FinanceRepository $finance)
     {
-        $this->bus = $bus;
+        $this->finance = $finance;
+    }
+
+    public function main()
+    {
+        $this->type             = !empty($this->inPut('type')) ? (int) $this->inPut('type') : Finance::TYPE_DAYS;
+        $this->createdAtBegin   = !empty($this->inPut('createdAtBegin'))
+                                    ? $this->inPut('createdAtBegin') : Carbon::parse(self::CREATE_AT_BEGIN)->toDateString();
+        $this->createdAtEnd     = !empty($this->inPut('createdAtEnd'))
+                                    ? $this->inPut('createdAtEnd') : Carbon::now()->toDateString();
+
+        $financeChart = call_user_func([$this, '__invoke']);
+
+        $this->outPut(ResponseCode::SUCCESS, '', $this->camelData($financeChart));
     }
 
     /**
-     * {@inheritdoc}
+     * @return mixed
+     * @throws PermissionDeniedException
      */
-    public function data(ServerRequestInterface $request, Document $document)
+    public function __invoke()
     {
-        $actor = $request->getAttribute('actor');
-        $filter = $this->extractFilter($request);
+        $query = $this->finance->query();
+        $query->whereBetween('created_at', [$this->createdAtBegin, $this->createdAtEnd]);
 
-        $type = (int) Arr::get($filter, 'type', Finance::TYPE_DAYS);
-        $createdAtBegin = Arr::get($filter, 'createdAtBegin', Carbon::parse(self::CREATE_AT_BEGIN)->toDateString());
-        $createdAtEnd = Arr::get($filter, 'createdAtEnd', Carbon::now()->toDateString());
+        if ($this->type !== Finance::TYPE_DAYS) {
+            $format = '';
+            if ($this->type == Finance::TYPE_WEEKS) {
+                $format = '%Y/%u'.app('translator')->get('statistic.week');
+            } elseif ($this->type == Finance::TYPE_MONTH) {
+                $format = '%Y/%m'.app('translator')->get('statistic.month');
+            }
+            $query->selectRaw(
+                "DATE_FORMAT(created_at,'{$format}') as `date`,".
+                'SUM(order_count) as order_count,'.
+                'SUM(order_amount) as order_amount,'.
+                'SUM(total_profit) as total_profit,'.
+                'SUM(register_profit) as register_profit,'.
+                'SUM(master_portion) as master_portion,'.
+                'SUM(withdrawal_profit) as withdrawal_profit'
+            );
+            $query->groupBy('date');
+            $query->orderBy('date', 'asc');
+        } else {
+            $query->selectRaw("*, DATE_FORMAT(created_at,'%Y/%m/%d') as `date` ");
+        }
 
-        return $this->bus->dispatch(new FinanceChart($actor, $type, $createdAtBegin, $createdAtEnd));
+        return $query->get();
     }
 }

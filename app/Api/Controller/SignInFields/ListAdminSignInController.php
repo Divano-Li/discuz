@@ -1,4 +1,5 @@
 <?php
+
 /**
  * Copyright (C) 2020 Tencent Cloud.
  *
@@ -17,21 +18,27 @@
 
 namespace App\Api\Controller\SignInFields;
 
-
-use App\Api\Serializer\AdminSignInSerializer;
+use App\Common\ResponseCode;
 use App\Models\AdminSignInFields;
-use Discuz\Api\Controller\AbstractListController;
 use Discuz\Auth\AssertPermissionTrait;
-use Psr\Http\Message\ServerRequestInterface;
-use Tobscure\JsonApi\Document;
+use Discuz\Base\DzqAdminController;
+use App\Repositories\UserRepository;
+use Discuz\Auth\Exception\PermissionDeniedException;
 
-class ListAdminSignInController extends AbstractListController
+class ListAdminSignInController extends DzqAdminController
 {
     use AssertPermissionTrait;
-    public $serializer = AdminSignInSerializer::class;
-    protected function data(ServerRequestInterface $request, Document $document)
+
+    protected function checkRequestPermissions(UserRepository $userRepo)
     {
-        $this->assertAdmin($request->getAttribute('actor'));
-        return AdminSignInFields::instance()->getAdminSignInFields();
+        if (!$this->user->isAdmin()) {
+            throw new PermissionDeniedException('您没有获取注册扩展列表权限');
+        }
+        return true;
+    }
+
+    public function main()
+    {
+        $this->outPut(ResponseCode::SUCCESS, '', $this->camelData(AdminSignInFields::instance()->getAdminSignInFields()));
     }
 }

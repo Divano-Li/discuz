@@ -1,4 +1,5 @@
 <?php
+
 /**
  * Copyright (C) 2020 Tencent Cloud.
  *
@@ -17,46 +18,46 @@
 
 namespace App\Api\Controller\SignInFields;
 
+use App\Common\ResponseCode;
+use App\Models\AdminSignInFields;
+use Discuz\Base\DzqAdminController;
 
-use App\Api\Serializer\AdminSignInSerializer;
-use App\Commands\SignInFields\CreateAdminSignIn;
-use Discuz\Api\Controller\AbstractCreateController;
-use Discuz\Auth\AssertPermissionTrait;
-use Illuminate\Contracts\Bus\Dispatcher;
-use Illuminate\Support\Arr;
-use Psr\Http\Message\ServerRequestInterface;
-use Tobscure\JsonApi\Document;
-
-
-class CreateAdminSignInController extends AbstractCreateController
+class CreateAdminSignInController extends DzqAdminController
 {
-    use AssertPermissionTrait;
-    public $serializer = AdminSignInSerializer::class;
-
-    /**
-     * @var Dispatcher
-     */
-    protected $bus;
-    /**
-     * @param Dispatcher $bus
-     */
-    public function __construct(Dispatcher $bus)
+    //兼容老版本斜杠入参
+    public function enumerate()
     {
-        $this->bus = $bus;
+        return [
+            'name' => 'name',
+            'type' => 'type',
+            'fieldsExt' => 'fields_ext',
+            'fieldsDesc' => 'fields_desc',
+            'sort'=>'sort',
+            'status'=> 'status',
+            'required' => 'required'
+        ];
     }
 
-
-    #怎么将对象转成json数据
-    protected function data(ServerRequestInterface $request, Document $document)
+    public function main()
     {
-        $actor = $request->getAttribute('actor');
-        $ip = ip($request->getServerParams());
-        $port = Arr::get($request->getServerParams(), 'REMOTE_PORT', 0);
-        $data = $request->getParsedBody()->get('data');
-        $this->assertAdmin($actor);
-//        vendor/illuminate/bus/Dispatcher.php
-        return $this->bus->dispatch(
-            new CreateAdminSignIn($actor, $data, $ip, $port)
-        );
+        $dataArr = $this->request->getParsedBody()->get('data');
+
+        $retureArr = [];
+        foreach ($dataArr as $attribute) {
+            if (!empty($attribute['id'])) {
+                $adminSignIn = AdminSignInFields::query()->where('id', $attribute['id'])->first();
+                if (empty($adminSignIn)) {
+                    continue;
+                }
+            } else {
+                $adminSignIn = new AdminSignInFields();
+            }
+            foreach ($attribute as $key => $value) {
+                in_array($key, array_keys($this->enumerate())) && $adminSignIn[$this->enumerate()[$key]] = $value;
+            }
+            $adminSignIn->save() && $retureArr[] = $adminSignIn;
+        }
+
+        $this->outPut(ResponseCode::SUCCESS, '', $this->camelData($retureArr));
     }
 }

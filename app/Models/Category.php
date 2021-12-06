@@ -44,6 +44,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 class Category extends DzqModel
 {
     use EventGeneratorTrait;
+
     use ScopeVisibilityTrait;
 
     /**
@@ -144,7 +145,6 @@ class Category extends DzqModel
             ->whereIn('category_id', $category_ids)
             ->whereNull('deleted_at')
             ->whereNotNull('user_id')
-            ->where('is_display', Thread::BOOL_YES)
             ->count();
 
         $categoryDetail = Category::query()->where('id', $this->id)->first();
@@ -157,7 +157,6 @@ class Category extends DzqModel
                 ->whereIn('category_id', $father_category_ids)
                 ->whereNull('deleted_at')
                 ->whereNotNull('user_id')
-                ->where('is_display', Thread::BOOL_YES)
                 ->count();
             $categoryFatherDetail->save();
         }
@@ -178,7 +177,6 @@ class Category extends DzqModel
             ->whereIn('category_id', $category_ids)
             ->whereNull('deleted_at')
             ->whereNotNull('user_id')
-            ->where('is_display', Thread::BOOL_YES)
             ->count();
         $categoryDetail->save();
         if ($categoryDetail->parentid !== 0) {
@@ -190,7 +188,6 @@ class Category extends DzqModel
                 ->whereIn('category_id', $father_category_ids)
                 ->whereNull('deleted_at')
                 ->whereNotNull('user_id')
-                ->where('is_display', Thread::BOOL_YES)
                 ->count();
             $categoryFatherDetail->save();
         }
@@ -253,7 +250,7 @@ class Category extends DzqModel
     {
         $category = Category::query()->findOrFail($id);
 
-        $childCategoryIds = array();
+        $childCategoryIds = [];
         if ($category->parentid == 0) {
             $childCategoryIds = Category::query()->where('parentid', $category->id)->pluck('id')->toArray();
         }
@@ -279,10 +276,6 @@ class Category extends DzqModel
 
     public function getValidCategoryIds(User $user, $categoryids = [])
     {
-        $groups = $user->groups->toArray();
-        if (empty($groups)) {
-            return false;
-        }
         $permissions = Permission::getUserPermissions($user);
         $categories = self::getCategories();
         $cids = array_column($categories, 'id');
@@ -305,7 +298,6 @@ class Category extends DzqModel
         }
         return $categoryids;
     }
-
 
     /**
      * @desc 获取所有分类

@@ -18,23 +18,20 @@
 
 namespace App\Api\Controller\Settings;
 
-use App\Api\Serializer\SettingSerializer;
-use Discuz\Api\Controller\AbstractResourceController;
-use Discuz\Auth\AssertPermissionTrait;
+use App\Common\CacheKey;
+use App\Models\Setting;
+use App\Common\ResponseCode;
+use Discuz\Base\DzqAdminController;
+use Discuz\Base\DzqCache;
 use Discuz\Contracts\Setting\SettingsRepository;
 use Illuminate\Contracts\Filesystem\Factory;
-use Illuminate\Support\Arr;
-use Psr\Http\Message\ServerRequestInterface;
-use Tobscure\JsonApi\Document;
 
-class DeleteLogoController extends AbstractResourceController
+class DeleteLogoController extends DzqAdminController
 {
-    use AssertPermissionTrait;
-
-    /**
-     * {@inheritdoc}
-     */
-    public $serializer = SettingSerializer::class;
+    public function suffixClearCache($user)
+    {
+        DzqCache::delKey(CacheKey::SETTINGS);
+    }
 
     /**
      * @var Factory
@@ -69,19 +66,9 @@ class DeleteLogoController extends AbstractResourceController
         $this->settings = $settings;
     }
 
-    /**
-     * @param ServerRequestInterface $request
-     * @param Document $document
-     * @return mixed
-     * @throws \Discuz\Auth\Exception\PermissionDeniedException
-     */
-    protected function data(ServerRequestInterface $request, Document $document)
+    public function main()
     {
-        $actor = $request->getAttribute('actor');
-
-        $this->assertCan($actor, 'setting.site');
-
-        $type = Arr::get($request->getParsedBody(), 'type', 'logo');
+        $type = $this->inPut('type') ? $this->inPut('type') : 'logo';
 
         // 类型
         $type = in_array($type, $this->allowTypes) ? $type : 'logo';
@@ -93,13 +80,13 @@ class DeleteLogoController extends AbstractResourceController
         $this->remove($this->settings->get($type, $settingTag));
 
         // 设置为空
-        $this->settings->set($type, '', $settingTag);
+        Setting::modifyValue($type, '', $settingTag);
 
-        return [
-            'key' => 'logo',
+        $this->outPut(ResponseCode::SUCCESS, '', [
+            'key' => $type,
             'value' => '',
-            'tag' => 'default'
-        ];
+            'tag' => $settingTag
+        ]);
     }
 
     /**

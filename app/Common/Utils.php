@@ -1,6 +1,7 @@
 <?php
+
 /**
- * Copyright (C) 2021 Tencent Cloud.
+ * Copyright (C) 2020 Tencent Cloud.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,13 +18,14 @@
 
 namespace App\Common;
 
-use Discuz\Base\DzqCache;
 use Illuminate\Http\Request;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Str;
 use Monolog\Formatter\LineFormatter;
 use Monolog\Handler\RotatingFileHandler;
 use Monolog\Logger;
+use PhpOffice\PhpSpreadsheet\Spreadsheet;
+use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 use Psr\Log\LoggerInterface;
 
 class Utils
@@ -189,8 +191,111 @@ class Utils
     public static function getTodayTime()
     {
         return [
-            'begin' => date("Y-m-d 00:00:00"),
-            'end' => date("Y-m-d 23:59:59")
+            'begin' => date('Y-m-d 00:00:00'),
+            'end' => date('Y-m-d 23:59:59')
         ];
+    }
+
+    //execl 导出
+    public static function localexport($filePath, $datas, $column_map, $fileName= '', $header = [], $readBuffer = 1024)
+    {
+        if(file_exists($filePath)){
+            unlink($filePath);
+        }
+        if (!$fileName) {
+            $fileName = basename($filePath);
+        }
+        $cells = ['A','B','C','D','E','F','G','H','I','J','K','L','M','N','O','P','Q','R','S','T','U','V','W','X','Y','Z'];
+
+        $spreadsheet = new Spreadsheet();
+        $sheet = $spreadsheet->getActiveSheet();
+        $keys = [];
+        foreach ($datas as $row => $data) {
+            $keys = array_keys($data);
+            $values = array_values($data);
+            foreach ($values as $index => $item) {
+                $sheet->setCellValue($cells[$index].($row+2), $item);
+            }
+        }
+        if ($keys) {
+            foreach ($keys as $index => $key) {
+                $sheet->setCellValue($cells[$index].'1', Arr::get($column_map, $key, $key));
+            }
+        }
+        $writer = new Xlsx($spreadsheet);
+        $writer->save($filePath);
+
+
+        //声明浏览器输出的是字节流
+        $contentType = isset($header['Content-Type']) ? $header['Content-Type'] : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+        header('Content-Type: ' . $contentType);
+        //声明浏览器返回大小是按字节进行计算
+        header('Accept-Ranges:bytes');
+        //告诉浏览器文件的总大小
+        $fileSize = filesize($filePath);//坑 filesize 如果超过2G 低版本php会返回负数
+        header('Content-Length:' . $fileSize); //注意是'Content-Length:' 非Accept-Length
+        $contentDisposition = isset($header['Content-Disposition']) ? $header['Content-Disposition'] : 'attachment;filename=' . $fileName;
+        //声明下载文件的名称
+        header('Content-Disposition:' . $contentDisposition);//声明作为附件处理和下载后文件的名称
+        //获取文件内容
+        $handle = fopen($filePath, 'rb');//二进制文件用‘rb’模式读取
+
+        while (!feof($handle)) { //循环到文件末尾 规定每次读取（向浏览器输出为$readBuffer设置的字节数）
+            echo fread($handle, $readBuffer);
+        }
+        fclose($handle);//关闭文件句柄
+        exit();
+    }
+
+    public static function setPluginAppId($pluginAppId){
+        return \Discuz\Common\Utils::setAppKey("plugin_appid", $pluginAppId);
+    }
+
+    public static function getPluginAppId(){
+        return \Discuz\Common\Utils::getAppKey("plugin_appid") ?? "";
+    }
+
+    public static function copyDir($src, $dst)
+    {
+        $dir = opendir($src);
+        @mkdir($dst);
+        while ($file = readdir($dir)) {
+            if (($file != '.') && ($file != '..')) {
+                if (is_dir($src . DIRECTORY_SEPARATOR . $file)) {
+                    self::copyDir($src . DIRECTORY_SEPARATOR . $file, $dst . DIRECTORY_SEPARATOR . $file);
+                } else {
+                    copy($src . DIRECTORY_SEPARATOR . $file, $dst . DIRECTORY_SEPARATOR . $file);
+                }
+            }
+        }
+        closedir($dir);
+    }
+
+    public static function removeDir($path)
+    {
+        if (empty($path) || !$path) {
+            return false;
+        }
+        if(substr($path, -strlen("/.")) == "/."
+            || substr($path, -strlen("/..")) == "/..") {
+            return false;
+        }
+
+        return is_file($path) ? @unlink($path) : array_map([self::class, __FUNCTION__], glob($path . '/{,.}*',GLOB_BRACE)) == @rmdir($path);
+    }
+
+
+    function extractZip($zipfile, $targetfolder)
+    {
+        $zip = new \ZipArchive;
+        $res = $zip->open($zipfile);
+        if ($res === true) {
+            if ($zip->extractTo($targetfolder) === FALSE) {
+                throw new \Exception("无法解压缩 $zipfile 到 $targetfolder");
+            }
+            $zip->close();
+        } else {
+            throw new \Exception("无法打开 $zipfile");
+        }
     }
 }

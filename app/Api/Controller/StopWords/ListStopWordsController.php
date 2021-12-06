@@ -18,85 +18,36 @@
 
 namespace App\Api\Controller\StopWords;
 
-use App\Api\Serializer\StopWordSerializer;
-use App\Repositories\StopWordRepository;
-use Discuz\Api\Controller\AbstractListController;
-use Discuz\Auth\AssertPermissionTrait;
-use Discuz\Http\UrlGenerator;
+use App\Common\ResponseCode;
+use App\Models\StopWord;
+use App\Repositories\UserRepository;
+use Discuz\Auth\Exception\PermissionDeniedException;
+use Discuz\Base\DzqAdminController;
 use Illuminate\Support\Arr;
-use Psr\Http\Message\ServerRequestInterface;
-use Tobscure\JsonApi\Document;
 
-class ListStopWordsController extends AbstractListController
+class ListStopWordsController extends DzqAdminController
 {
-    use AssertPermissionTrait;
-
-    /**
-     * {@inheritdoc}
-     */
-    public $serializer = StopWordSerializer::class;
-
-    /**
-     * {@inheritdoc}
-     */
-    public $include = ['user'];
-
-    /**
-     * @var StopWordRepository
-     */
-    protected $stopWords;
-
-    /**
-     * @var UrlGenerator
-     */
-    protected $url;
-
-    /**
-     * @param StopWordRepository $stopWords
-     * @param UrlGenerator $url
-     */
-    public function __construct(StopWordRepository $stopWords, UrlGenerator $url)
+    protected function checkRequestPermissions(UserRepository $userRepo)
     {
-        $this->stopWords = $stopWords;
-        $this->url = $url;
+        if (!$this->user->isAdmin()) {
+            throw new PermissionDeniedException('您没有访问敏感词列表的权限');
+        }
+        return true;
     }
 
-    /**
-     * {@inheritdoc}
-     */
-    protected function data(ServerRequestInterface $request, Document $document)
+    public function main()
     {
-        $this->assertAdmin($request->getAttribute('actor'));
-
-        $limit = $this->extractLimit($request);
-        $offset = $this->extractOffset($request);
-        $include = $this->extractInclude($request);
-        $keyword = Arr::get($this->extractFilter($request), 'q');
-
-        $query = $this->stopWords
-            ->query()
-            ->with($include)
-            ->when($keyword, function ($query, $keyword) {
-                return $query->where('find', 'like', "%$keyword%");
-            });
-
-        $stopWordCount = $limit > 0 ? $query->count() : null;
-
-        $stopWords = $query->limit($limit)->offset($offset)->get();
-
-        $document->addPaginationLinks(
-            $this->url->route('stop-words.index'),
-            $request->getQueryParams(),
-            $offset,
-            $limit,
-            $stopWordCount
-        );
-
-        $document->setMeta([
-            'total' => $stopWordCount,
-            'pageCount' => ceil($stopWordCount / $limit),
-        ]);
-
-        return $stopWords;
+        $currentPage = $this->inPut('page');
+        $perPage = $this->inPut('perPage');
+        $filter = $this->inPut('filter');
+        $query = StopWord::query();
+        if ($keyword = trim(Arr::get($filter, 'keyword'))) {
+            $query = $query
+                ->when($keyword, function ($query, $keyword) {
+                    return $query->where('find', 'like', "%$keyword%");
+                });
+        }
+        $stopWords = $this->pagination($currentPage, $perPage, $query);
+        $this->outPut(ResponseCode::SUCCESS, '', $this->camelData($stopWords));
     }
 }

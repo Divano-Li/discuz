@@ -21,7 +21,6 @@ use App\Common\ResponseCode;
 use App\Models\Category;
 use App\Repositories\UserRepository;
 use Discuz\Base\DzqController;
-use Discuz\Base\DzqLog;
 
 class ListCategoriesController extends DzqController
 {
@@ -39,7 +38,6 @@ class ListCategoriesController extends DzqController
 
     public function main()
     {
-
         $categories = Category::query()
             ->select([
                 'id as pid', 'name', 'description', 'icon', 'sort', 'property', 'thread_count as threadCount', 'parentid'
@@ -48,14 +46,13 @@ class ListCategoriesController extends DzqController
             ->orderBy('sort')
             ->get()->toArray();
 
-        DzqLog::info('categories', $categories);
         $categoriesFather = [];
         $categoriesChild = [];
 
         foreach ($categories as $category) {
             $category['canCreateThread'] = $this->userRepo->canCreateThread($this->user, $category['pid']);
             $category['searchIds'] = [(int)$category['pid']];
-            DzqLog::info('categories1', [$category]);
+
             // 二级子类集合
             if ($category['parentid'] !== 0) {
                 $categoriesChild[$category['parentid']][] = $category;

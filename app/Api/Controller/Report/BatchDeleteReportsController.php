@@ -1,84 +1,38 @@
 <?php
-
-/**
- * Copyright (C) 2020 Tencent Cloud.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
 namespace App\Api\Controller\Report;
 
-use App\Api\Serializer\ReportsSerializer;
-use App\Commands\Report\BatchDeleteReport;
-use Discuz\Api\Controller\AbstractListController;
-use Discuz\Auth\AssertPermissionTrait;
-use Illuminate\Contracts\Bus\Dispatcher;
-use Illuminate\Support\Arr;
-use Psr\Http\Message\ServerRequestInterface;
-use Tobscure\JsonApi\Document;
+use App\Models\Report;
+use App\Common\ResponseCode;
+use App\Repositories\UserRepository;
+use Discuz\Base\DzqAdminController;
 
-class BatchDeleteReportsController extends AbstractListController
+class BatchDeleteReportsController extends DzqAdminController
 {
-    use AssertPermissionTrait;
-
-    /**
-     * {@inheritdoc}
-     */
-    public $serializer = ReportsSerializer::class;
-
-    /**
-     * @var Dispatcher
-     */
-    protected $bus;
-
-    /**
-     * @param Dispatcher $bus
-     */
-    public function __construct(Dispatcher $bus)
+    public function main()
     {
-        $this->bus = $bus;
-    }
+        $idString = $this->inPut('ids');
+        if (empty($idString)) {
+            $this->outPut(ResponseCode::INTERNAL_ERROR, '缺少必要参数', '');
+        }
+        $ids = explode(',', $idString);
 
-    /**
-     * {@inheritdoc}
-     *
-     * @param ServerRequestInterface $request
-     * @param Document $document
-     * @return array|mixed
-     * @throws \Discuz\Auth\Exception\PermissionDeniedException
-     */
-    protected function data(ServerRequestInterface $request, Document $document)
-    {
-        $actor = $request->getAttribute('actor');
-        $this->assertPermission($actor->isAdmin());
+        if (count($ids) > 100) {
+            $this->outPut(ResponseCode::INTERNAL_ERROR, '批量添加超过限制', '');
+        }
 
-        $ids = explode(',', Arr::get($request->getQueryParams(), 'ids'));
-        $idsCollect = collect($ids);
-
-        $result = ['data' => [], 'meta' => []];
-
-        $idsCollect->each(function ($id) use ($actor, &$result) {
-            try {
-                $result['data'][] = $this->bus->dispatch(
-                    new BatchDeleteReport($actor, $id)
-                );
-            } catch (\Exception $e) {
-                $result['meta'][] = ['id' => $id, 'message' => $e->getMessage()];
+        foreach ($ids as $id) {
+            if ($id < 1) {
+                $this->outPut(ResponseCode::INVALID_PARAMETER, '', '');
             }
-        });
+        }
 
-        $document->setMeta($result['meta']);
+        $result = Report::query()->whereIn('id', $ids)->delete();
+        if (!$result) {
+            app('log')->info('requestId：' . $this->requestId . '-' . '删除举报记录出错，ID为： ' . $idString);
+            $this->outPut(ResponseCode::DB_ERROR, '', '');
+        }
 
-        return $result['data'];
+
+        $this->outPut(ResponseCode::SUCCESS, '', '');
     }
 }

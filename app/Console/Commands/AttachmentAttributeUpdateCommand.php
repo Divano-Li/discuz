@@ -21,6 +21,7 @@ namespace App\Console\Commands;
 use App\Models\Attachment;
 use Discuz\Console\AbstractCommand;
 use Discuz\Contracts\Setting\SettingsRepository;
+use Discuz\Common\Utils;
 use Discuz\Foundation\Application;
 use Illuminate\Support\Str;
 use Intervention\Image\ImageManager;
@@ -39,12 +40,14 @@ class AttachmentAttributeUpdateCommand extends AbstractCommand
     protected $filesystem;
 
     protected $app;
+
     /**
      * {@inheritdoc}
      */
     protected $description = '更新附件历史图片宽高';
 
-    public function __construct(string $name = null,Application $app, SettingsRepository $settings,ImageManager $image) {
+    public function __construct(string $name = null, Application $app, SettingsRepository $settings, ImageManager $image)
+    {
         parent::__construct($name);
         $this->settings = $settings;
         $this->image = $image;
@@ -63,67 +66,67 @@ class AttachmentAttributeUpdateCommand extends AbstractCommand
         $type = [Attachment::TYPE_OF_IMAGE,Attachment::TYPE_OF_DIALOG_MESSAGE,Attachment::TYPE_OF_ANSWER];
         $log = app('log');
         $attachments = Attachment::query()
-            ->whereIn('type',$type)
-            ->where('file_width',0)
-            ->where('file_height',0)
+            ->whereIn('type', $type)
+            ->where('file_width', 0)
+            ->where('file_height', 0)
             ->whereRaw("SUBSTRING(LOWER(file_type),7) IN ('jpeg','gif','png','jpg')")
             ->limit(100)
             ->orderByDesc('id')
             ->get();
         try {
             $allExt = ['jpeg','jpg','gif','png'];
-            if($attachments){
-                $attachments->map(function (Attachment $image) use ($log,$allExt) {
+            if ($attachments) {
+                $attachments->map(function (Attachment $image) use ($log, $allExt) {
                     if ($image['is_remote']) {
                         $remoteServer = $this->settings->get('qcloud_cos_cdn_url', 'qcloud', true);
                         $right =  substr($remoteServer, -1);
-                        if("/"==$right){
-                            $remoteServer = substr($remoteServer,0,strlen($remoteServer)-1);
+                        if ('/'==$right) {
+                            $remoteServer = substr($remoteServer, 0, strlen($remoteServer)-1);
                         }
-                        $remoteUrl = $remoteServer."/".$image->full_path;
-                        $fileData = @file_get_contents($remoteUrl,false, stream_context_create(['ssl'=>['verify_peer'=>false, 'verify_peer_name'=>false]]));
-                        if($fileData){
+                        $remoteUrl = $remoteServer.'/'.$image->full_path;
+                        $fileData = Utils::downLoadFile($remoteUrl);
+                        if ($fileData) {
                             $extension =Str::afterLast($image['attachment'], '.');
                             $extensionSmall = strtolower($extension);
                             $fileName = $image['file_name'];
                             $temFileName = md5($fileName);
-                            if(in_array($extensionSmall,$allExt)){
-                                file_put_contents(storage_path('tmp/').$temFileName.".".$extension,$fileData);
-                                list($width, $height) = getimagesize(storage_path('tmp/').$temFileName.".".$extension);
+                            if (in_array($extensionSmall, $allExt)) {
+                                file_put_contents(storage_path('tmp/').$temFileName.'.'.$extension, $fileData);
+                                list($width, $height) = getimagesize(storage_path('tmp/').$temFileName.'.'.$extension);
                                 $image->file_width = (int) $width;
                                 $image->file_height = (int) $height;
-                                if($image->save()){
+                                if ($image->save()) {
                                     $log->info("附件图片更新成功 attachmentId：{$image->id}，fileWidth：{$image->file_width}，fileHeight：{$image->file_height}");
-                                }else{
+                                } else {
                                     $log->info("附件图片更新失败 attachmentId：{$image->id}，oldFileWidth：{$width}，oldFileHeight：{$height}");
                                 }
-                                unlink(storage_path('tmp/').$temFileName.".".$extension);
-                            }else{
+                                unlink(storage_path('tmp/').$temFileName.'.'.$extension);
+                            } else {
                                 $log->info("附件图片更新失败 attachmentId：{$image->id}，只支持jpeg,jpg,png,gif格式");
                             }
-                        }else{
+                        } else {
                             $image->file_width = 100;
                             $image->file_height = 100;
                             $image->save();
                             $log->info("附件图片不存在 attachmentId：{$image->id}");
                         }
                     } else {
-                        if(file_exists(storage_path('app/' . $image->full_path))){
+                        if (file_exists(storage_path('app/' . $image->full_path))) {
                             $pathInfo = pathinfo(storage_path('app/' . $image->full_path));
                             $extensionSmall = strtolower($pathInfo['extension']);
-                            if(in_array($extensionSmall,$allExt)){
+                            if (in_array($extensionSmall, $allExt)) {
                                 list($width, $height) = getimagesize(storage_path('app/' . $image->full_path));
                                 $image->file_width = (int) $width;
                                 $image->file_height = (int) $height;
-                                if($image->save()){
+                                if ($image->save()) {
                                     $log->info("附件图片更新成功 attachmentId：{$image->id}，fileWidth：{$image->file_width}，fileHeight：{$image->file_height}");
-                                }else{
+                                } else {
                                     $log->info("附件图片更新失败 attachmentId：{$image->id}，oldFileWidth：{$width}，oldFileHeight：{$height}");
                                 }
-                            }else{
+                            } else {
                                 $log->info("附件图片更新失败 attachmentId：{$image->id}，只支持jpeg,jpg,png,gif格式");
                             }
-                        }else{
+                        } else {
                             $image->file_width = 100;
                             $image->file_height = 100;
                             $image->save();
@@ -132,8 +135,8 @@ class AttachmentAttributeUpdateCommand extends AbstractCommand
                     }
                 });
             }
-        }catch (\Exception $e){
-            $log->error("附件图片更新失败 Exception:".$e->getMessage());
+        } catch (\Exception $e) {
+            $log->error('附件图片更新失败 Exception:'.$e->getMessage());
         }
         $this->info('更新历史图片宽高脚本执行 [结束]');
     }

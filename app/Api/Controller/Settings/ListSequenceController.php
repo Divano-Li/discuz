@@ -18,34 +18,50 @@
 
 namespace App\Api\Controller\Settings;
 
-use App\Api\Serializer\SequenceSerializer;
+use App\Common\ResponseCode;
 use App\Models\Sequence;
-use Discuz\Api\Controller\AbstractResourceController;
-use Discuz\Auth\AssertPermissionTrait;
-use Discuz\Auth\Exception\PermissionDeniedException;
-use Illuminate\Support\Arr;
-use Illuminate\Support\Str;
-use Psr\Http\Message\ServerRequestInterface;
-use Tobscure\JsonApi\Document;
+use App\Models\Topic;
+use App\Models\User;
+use Discuz\Base\DzqAdminController;
 
-class ListSequenceController extends AbstractResourceController
+class ListSequenceController extends DzqAdminController
 {
-    use AssertPermissionTrait;
-
-    /**
-     * {@inheritdoc}
-     */
-    public $serializer = SequenceSerializer::class;
-
-    /**
-     * @param ServerRequestInterface $request
-     * @param Document $document
-     * @return Collection
-     * @throws InvalidParameterException
-     */
-    protected function data(ServerRequestInterface $request, Document $document)
+    public function main()
     {
-        $this->assertAdmin($request->getAttribute('actor'));
-        return Sequence::query()->first();
+        $sequence = Sequence::query()->first();
+        $data = [];
+        if ($sequence) {
+            $sequence = $sequence->toArray();
+            $userInfo = null;
+            if (!empty($sequence['user_ids'])) {
+                $userIdArr = explode(',', $sequence['user_ids']);
+                $userInfo = User::query()->whereIn('id', $userIdArr)->get(['id','username'])->toArray();
+            }
+            $blockUserInfo = null;
+            if (!empty($sequence['block_user_ids'])) {
+                $blockUserIdArr = explode(',', $sequence['block_user_ids']);
+                $blockUserInfo = User::query()->whereIn('id', $blockUserIdArr)->get(['id','username'])->toArray();
+            }
+            $topicInfo = null;
+            if (!empty($sequence['topic_ids'])) {
+                $topicIdArr = explode(',', $sequence['topic_ids']);
+                $topicInfo = Topic::query()->whereIn('id', $topicIdArr)->get(['id','content'])->toArray();
+            }
+            $blockTopicInfo = null;
+            if (!empty($sequence['block_topic_ids'])) {
+                $blockTopicIdArr = explode(',', $sequence['block_topic_ids']);
+                $blockTopicInfo = Topic::query()->whereIn('id', $blockTopicIdArr)->get(['id','content'])->toArray();
+            }
+            $sequence['userInfo'] = $userInfo;
+            $sequence['blockUserInfo'] = $blockUserInfo;
+            $sequence['topicInfo'] = $topicInfo;
+            $sequence['blockTopicInfo'] = $blockTopicInfo;
+            unset($sequence['user_ids']);
+            unset($sequence['block_user_ids']);
+            unset($sequence['topic_ids']);
+            unset($sequence['block_topic_ids']);
+            $data = $this->camelData($sequence);
+        }
+        $this->outPut(ResponseCode::SUCCESS, '', $data);
     }
 }

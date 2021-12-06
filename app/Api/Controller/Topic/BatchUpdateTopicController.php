@@ -16,67 +16,62 @@
  * limitations under the License.
  */
 
-
 namespace App\Api\Controller\Topic;
 
-use App\Commands\Topic\EditTopic;
-use Discuz\Api\Controller\AbstractListController;
-use Illuminate\Contracts\Bus\Dispatcher;
-use Discuz\Auth\AssertPermissionTrait;
-use Illuminate\Support\Arr;
-use Psr\Http\Message\ServerRequestInterface;
-use App\Api\Serializer\TopicSerializer;
-use Tobscure\JsonApi\Document;
+use App\Common\ResponseCode;
+use App\Models\AdminActionLog;
+use App\Models\Topic;
+use App\Repositories\UserRepository;
+use Discuz\Auth\Exception\PermissionDeniedException;
+use Discuz\Base\DzqAdminController;
 
-class BatchUpdateTopicController extends AbstractListController
+class BatchUpdateTopicController extends DzqAdminController
 {
-    use AssertPermissionTrait;
-    /**
-     * {@inheritdoc}
-     */
-    public $serializer = TopicSerializer::class;
-
-    /**
-     * @var Dispatcher
-     */
-    protected $bus;
-
-    /**
-     * @param Dispatcher $bus
-     */
-    public function __construct(Dispatcher $bus)
+    protected function checkRequestPermissions(UserRepository $userRepo)
     {
-        $this->bus = $bus;
+        if (!$this->user->isAdmin()) {
+            throw new PermissionDeniedException('您没有批量修改话题的权限');
+        }
+        return true;
     }
 
-    /**
-     * {@inheritdoc}
-     */
-    protected function data(ServerRequestInterface $request, Document $document)
+    public function main()
     {
+        $ids = $this->inPut('ids');
+        if (empty($ids)) {
+            $this->outPut(ResponseCode::INVALID_PARAMETER);
+        }
+        $idsArr = explode(',', $ids);
 
-        $actor = $request->getAttribute('actor');
-        $this->assertAdmin($actor);
+        $isRecommended = $this->inPut('isRecommended');
 
-        $data = $request->getParsedBody()->get('data', []);
-        $ids = explode(',', Arr::get($request->getQueryParams(), 'ids'));
-        $this->assertBatchData($ids);
+        foreach ($idsArr as $key=>$value) {
+            $topic = Topic::query()->where('id', $value)->first();
 
-        $idsCollect = collect($ids);
-
-        $result = ['data' => [], 'meta' => []];
-        $idsCollect->each(function ($id) use ($data, $actor, &$result) {
-            try {
-                $result['data'][] = $this->bus->dispatch(
-                    new EditTopic($id, $actor, $data)
-                );
-            } catch (\Exception $e) {
-                $result['meta'][] = ['id' => $id, 'message' => $e->getMessage()];
+            if ($topic->recommended == $isRecommended) {
+                continue;
             }
-        });
 
-        $document->setMeta($result['meta']);
+            if ($isRecommended || $isRecommended == 0) {
+                $topic->recommended = (bool)$isRecommended ? 1 : 0;
+                $topic->recommended_at = date('Y-m-d H:i:s', time());
+            }
+            if ($topic->recommended == 1) {
+                $actionDesc = '推荐话题【'. $topic['content'] .'】';
+            } else {
+                $actionDesc = '取消推荐话题【'. $topic['content'] .'】';
+            }
+            $topic->save();
 
-        return $result['data'];
+            if ($actionDesc !== '' && !empty($actionDesc)) {
+                AdminActionLog::createAdminActionLog(
+                    $this->user->id,
+                    AdminActionLog::ACTION_OF_TOPIC,
+                    $actionDesc
+                );
+            }
+        }
+
+        $this->outPut(ResponseCode::SUCCESS);
     }
 }

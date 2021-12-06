@@ -18,55 +18,45 @@
 
 namespace App\Api\Controller\Topic;
 
-use App\Api\Serializer\TopicSerializer;
-use App\Commands\Topic\DeleteTopic;
-use Discuz\Api\Controller\AbstractListController;
-use Discuz\Auth\AssertPermissionTrait;
-use Illuminate\Contracts\Bus\Dispatcher;
-use Illuminate\Support\Arr;
-use Psr\Http\Message\ServerRequestInterface;
-use Tobscure\JsonApi\Document;
+use App\Common\ResponseCode;
+use App\Models\AdminActionLog;
+use App\Models\Topic;
+use App\Repositories\UserRepository;
+use Discuz\Auth\Exception\PermissionDeniedException;
+use Discuz\Base\DzqAdminController;
 
-class BatchDeleteTopicController extends AbstractListController
+class BatchDeleteTopicController extends DzqAdminController
 {
-    use AssertPermissionTrait;
-
-    public $serializer = TopicSerializer::class;
-
-    protected $bus;
-
-    public function __construct(Dispatcher $bus)
+    protected function checkRequestPermissions(UserRepository $userRepo)
     {
-        $this->bus = $bus;
+        if (!$this->user->isAdmin()) {
+            throw new PermissionDeniedException('您没有批量删除话题的权限');
+        }
+        return true;
     }
 
-    /**
-     * @inheritDoc
-     * @throws \Discuz\Auth\Exception\PermissionDeniedException
-     */
-    protected function data(ServerRequestInterface $request, Document $document)
+    public function main()
     {
-        $actor = $request->getAttribute('actor');
-        $this->assertAdmin($actor);
+        $ids = $this->inPut('ids');
+        if (empty($ids)) {
+            $this->outPut(ResponseCode::INVALID_PARAMETER);
+        }
+        $idsArr = explode(',', $ids);
 
-        $ids = explode(',', Arr::get($request->getQueryParams(), 'ids'));
-        $this->assertBatchData($ids);
-
-        $idsCollect = collect($ids);
-
-        $result = ['data' => [], 'meta' => []];
-        $idsCollect->each(function ($id) use ($actor, &$result) {
-            try {
-                $result['data'][] = $this->bus->dispatch(
-                    new DeleteTopic($id, $actor)
-                );
-            } catch (\Exception $e) {
-                $result['meta'][] = ['id' => $id, 'message' => $e->getMessage()];
+        foreach ($idsArr as $key=>$value) {
+            $topic = Topic::query()->where('id', $value)->first();
+            if (!$topic) {
+                continue;
             }
-        });
+            $topicContent = $topic->content;
+            $topic->delete();
+            AdminActionLog::createAdminActionLog(
+                $this->user->id,
+                AdminActionLog::ACTION_OF_TOPIC,
+                '删除话题【'. $topicContent .'】'
+            );
+        }
 
-        $document->setMeta($result['meta']);
-
-        return $result['data'];
+        $this->outPut(ResponseCode::SUCCESS);
     }
 }

@@ -1,7 +1,6 @@
 <?php
-
 /**
- * Copyright (C) 2020 Tencent Cloud.
+ * Copyright (C) 2021 Tencent Cloud.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,65 +17,32 @@
 
 namespace App\Api\Controller\Settings;
 
-use App\Api\Serializer\ForumSettingSerializer;
-use Discuz\Api\Controller\AbstractResourceController;
-use Discuz\Contracts\Setting\SettingsRepository;
-use Illuminate\Support\Arr;
-use Illuminate\Support\Str;
-use Psr\Http\Message\ServerRequestInterface;
-use Tobscure\JsonApi\Document;
+use App\Common\ResponseCode;
+use App\Events\SiteInfo\AdminSiteInfo;
+use App\Settings\SettingsRepository;
+use App\Repositories\UserRepository;
+use Discuz\Base\DzqController;
+use Illuminate\Contracts\Events\Dispatcher as Events;
 
-class ForumSettingsController extends AbstractResourceController
+class ForumSettingsController extends DzqController
 {
-    /**
-     * {@inheritdoc}
-     */
-    public $serializer = ForumSettingSerializer::class;
+    use ForumSettingTrait;
 
-    /**
-     * {@inheritdoc}
-     */
-    public $optionalInclude = ['users'];
-
-    /**
-     * @var SettingsRepository
-     */
-    public $settings;
-
-    /**
-     * @param SettingsRepository $settings
-     */
-    public function __construct(SettingsRepository $settings)
+    protected function checkRequestPermissions(UserRepository $userRepo)
     {
-        $this->settings = $settings;
+        return true;
     }
 
-    /**
-     * {@inheritdoc}
-     */
-    protected function data(ServerRequestInterface $request, Document $document)
+    public function __construct(SettingsRepository $settings, Events $events)
     {
-        $filter = $this->extractFilter($request);
+        $this->settings = $settings;
+        $this->events = $events;
+    }
 
-        $tag = Str::of(Arr::get($filter, 'tag', ''))->replace(' ', '')->explode(',')->filter();
-
-        if ($tag->contains('agreement')) {
-            $agreement = $this->settings->tag('agreement') ?? [];
-
-            $data['agreement'] = [
-                'privacy' => (bool) ($agreement['privacy'] ?? false),
-                'privacy_content' => $agreement['privacy_content'] ?? '',
-                'register' => (bool) ($agreement['register'] ?? false),
-                'register_content' => $agreement['register_content'] ?? '',
-            ];
-        } else {
-            $data = [];
-        }
-
-        if (in_array('users', $this->extractInclude($request))) {
-            $data['users'] = [];
-//            $data['users'] = User::orderBy('created_at', 'desc')->limit(5)->get(['id', 'username', 'avatar']);
-        }
-        return $data + ['id' => 1];
+    public function main()
+    {
+        $data = $this->forumSettingMain();
+        $this->events->dispatch(new AdminSiteInfo($this->user));
+        $this->outPut(ResponseCode::SUCCESS, '', $data);
     }
 }

@@ -18,39 +18,36 @@
 
 namespace App\Api\Controller\StopWords;
 
-use App\Commands\StopWord\DeleteStopWord;
-use Discuz\Api\Controller\AbstractDeleteController;
-use Illuminate\Contracts\Bus\Dispatcher;
-use Illuminate\Support\Arr;
-use Psr\Http\Message\ServerRequestInterface;
+use App\Common\ResponseCode;
+use App\Models\StopWord;
+use App\Repositories\UserRepository;
+use Discuz\Auth\Exception\PermissionDeniedException;
+use Discuz\Base\DzqAdminController;
 
-class DeleteStopWordController extends AbstractDeleteController
+class DeleteStopWordController extends DzqAdminController
 {
-    /**
-     * @var Dispatcher
-     */
-    protected $bus;
-
-    /**
-     * @param Dispatcher $bus
-     */
-    public function __construct(Dispatcher $bus)
+    protected function checkRequestPermissions(UserRepository $userRepo)
     {
-        $this->bus = $bus;
+        if (!$this->user->isAdmin()) {
+            throw new PermissionDeniedException('您没有删除敏感词的权限');
+        }
+        return true;
     }
 
-    /**
-     * {@inheritdoc}
-     */
-    protected function delete(ServerRequestInterface $request)
+    public function main()
     {
-        $ids = explode(',', Arr::get($request->getQueryParams(), 'id'));
-        $actor = $request->getAttribute('actor');
-        
-        foreach ($ids as $id) {
-            $this->bus->dispatch(
-                new DeleteStopWord($id, $actor)
-            );
+        $ids = $this->inPut('ids');
+        if (empty($ids)) {
+            $this->outPut(ResponseCode::INVALID_PARAMETER);
         }
+        $ids = explode(',', $ids);
+        foreach ($ids as $id) {
+            $stopWord = StopWord::query()->where('id', $id)->first();
+            if (!$stopWord) {
+                break;
+            }
+            $stopWord->delete();
+        }
+        $this->outPut(ResponseCode::SUCCESS);
     }
 }

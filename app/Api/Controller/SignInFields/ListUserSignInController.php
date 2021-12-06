@@ -1,4 +1,5 @@
 <?php
+
 /**
  * Copyright (C) 2020 Tencent Cloud.
  *
@@ -17,24 +18,46 @@
 
 namespace App\Api\Controller\SignInFields;
 
-use App\Api\Serializer\UserSignInSerializer;
+use App\Api\Controller\Users\AuthBaseController;
+use App\Common\ResponseCode;
 use App\Models\UserSignInFields;
-use Discuz\Api\Controller\AbstractListController;
-use Illuminate\Support\Arr;
-use Psr\Http\Message\ServerRequestInterface;
-use Tobscure\JsonApi\Document;
+use App\Repositories\UserRepository;
+use Discuz\Auth\Exception\PermissionDeniedException;
+use Discuz\Base\DzqLog;
 
-class ListUserSignInController extends AbstractListController
+class ListUserSignInController extends AuthBaseController
 {
-    public $serializer = UserSignInSerializer::class;
-    protected function data(ServerRequestInterface $request, Document $document)
+    protected function checkRequestPermissions(UserRepository $userRepo)
     {
-        $actor = $request->getAttribute('actor');
-        $params = $request->getQueryParams();
-        $userId = Arr::get($params, 'user_id');
-        if(empty($userId)){
-            throw new \Exception('user_id不能为空');
+        $actor = $this->user;
+        if ($actor->isGuest()) {
+            app('log')->info(
+                '[infoParam:]'
+                . '[requestId:]' . $this->requestId
+                . ';[requestIP:]' . ip($this->request->getServerParams())
+                . ';[requestTarget:]' . $this->request->getRequestTarget()
+                . ';[remake:]' . '没有访问扩展字段的权限'
+                . ';[user:]' . json_encode($actor)
+            );
+            throw new PermissionDeniedException('没有访问扩展字段的权限');
         }
-        return UserSignInFields::instance()->getUserSignInFields($userId);
+        return true;
+    }
+
+    public function main()
+    {
+        try {
+            $userId = $this->user->id;
+            if (empty($userId)) {
+                $this->outPut(ResponseCode::USERID_NOT_ALLOW_NULL);
+            }
+
+            $result = UserSignInFields::instance()->getUserSignInFields($userId);
+
+            $this->outPut(ResponseCode::SUCCESS, '', $this->camelData($result));
+        } catch (\Exception $e) {
+            DzqLog::error('list_user_sign_in_api_error', [], $e->getMessage());
+            $this->outPut(ResponseCode::INTERNAL_ERROR, '扩展字段查询接口异常');
+        }
     }
 }

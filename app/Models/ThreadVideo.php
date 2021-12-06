@@ -58,11 +58,11 @@ class ThreadVideo extends DzqModel
 
     const VIDEO_STATUS_FAIL = 2;        // 转码失败
 
-
     private $typeDic = [
         self::TYPE_OF_AUDIO => '音频',
         self::TYPE_OF_VIDEO => '视频'
     ];
+
     /**
      * {@inheritdoc}
      */
@@ -96,32 +96,33 @@ class ThreadVideo extends DzqModel
         return $this->belongsTo(Post::class);
     }
 
-    public function getThreadVideo($threadId, $type = null, $isV3 = false)
-    {
-        $video = self::query()->where(['thread_id' => $threadId, 'status' => self::VIDEO_STATUS_SUCCESS]);
-        if ($type != null) {
-            $video = $video->where('type', $type);
-        }
-        $video = $video->first();
-        if (empty($video)) {
-            return false;
-        }
-        $result = [
-            'fileName' => $video['file_name'],
-            'height' => $video['height'],
-            'width' => $video['width'],
-            'duration' => $video['duration'],
-            'status' => $video['status'],
-            'mediaUrl' => $this->getMediaUrl($video),
-            'coverUrl' => $video['cover_url']
-        ];
-        if (!$isV3) {
-            $result ['pid'] = $video['id'];
-        } else {
-            $result ['id'] = $video['id'];
-        }
-        return $result;
-    }
+//    public function getThreadVideo($threadId, $type = null, $isV3 = false)
+//    {
+//        $video = self::query()->where(['thread_id' => $threadId, 'status' => self::VIDEO_STATUS_SUCCESS]);
+//        if ($type != null) {
+//            $video = $video->where('type', $type);
+//        }
+//        $video = $video->first();
+//        if (empty($video)) {
+//            return false;
+//        }
+//        $result = [
+//            'fileName' => $video['file_name'],
+//            'height' => $video['height'],
+//            'width' => $video['width'],
+//            'duration' => $video['duration'],
+//            'status' => $video['status'],
+//            'mediaUrl' => $this->getMediaUrl($video),
+//            'coverUrl' => $video['cover_url']
+//        ];
+//        if (!$isV3) {
+//            $result ['pid'] = $video['id'];
+//            $result ['videoId'] = $video['id'];
+//        } else {
+//            $result ['id'] = $video['id'];
+//        }
+//        return $result;
+//    }
 
     /**
      * @desc v3接口调用

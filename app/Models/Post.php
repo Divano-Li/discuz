@@ -18,11 +18,9 @@
 
 namespace App\Models;
 
-use App\Common\CacheKey;
 use App\Events\Post\Hidden;
 use App\Events\Post\Restored;
 use App\Events\Post\Revised;
-use App\Models\UserWalletLog;
 use App\Formatter\Formatter;
 use App\Modules\ThreadTom\TomConfig;
 use Carbon\Carbon;
@@ -76,16 +74,22 @@ use Illuminate\Support\Str;
 class Post extends DzqModel
 {
     use EventGeneratorTrait;
+
     use ScopeVisibilityTrait;
 
     /**
      * 通知 Post 操作方式
      */
     const NOTIFY_EDIT_CONTENT_TYPE = 'edit_content';    // 内容修改
+
     const NOTIFY_UNAPPROVED_TYPE   = 'unapproved';      // 内容不合法/内容忽略
+
     const NOTIFY_APPROVED_TYPE     = 'approved';        // 内容合法
+
     const NOTIFY_ESSENCE_TYPE      = 'essence';         // 内容加精
+
     const NOTIFY_STICKY_TYPE       = 'sticky';          // 内容置顶
+
     const NOTIFY_DELETE_TYPE       = 'delete';          // 内容删除
 
     /**
@@ -111,15 +115,18 @@ class Post extends DzqModel
 
     const IGNORED = 2;
 
-
     const FIRST_YES = 1;
+
     const FIRST_NO = 0;
 
     const COMMENT_YES = 1;
+
     const COMMENT_NO = 0;
 
     const APPROVED_YES = 1;
+
     const APPROVED_NO = 0;
+
     /**
      * {@inheritdoc}
      */
@@ -202,7 +209,7 @@ class Post extends DzqModel
         $content = Str::of($this->content ?: '');
         if ($content->length() > self::SUMMARY_LENGTH) {
             $subContent = $content->substr(0, self::SUMMARY_LENGTH);
-            if(stristr($subContent,'http')){
+            if (stristr($subContent, 'http')) {
                 $content = Str::of(strip_tags($this->formatContent()));
             }
             $content = static::$formatter->parse(
@@ -223,9 +230,9 @@ class Post extends DzqModel
      */
     public function getSummaryTextAttribute()
     {
-       $content = Str::of($this->content ?: '');
+        $content = Str::of($this->content ?: '');
         if (substr($content, 0, 3) === '<r>' && substr($content, -4) != '</r>') {
-             $content = mb_substr($content, 3, -4);
+            $content = mb_substr($content, 3, -4);
         }
         if (substr($content, 0, 3) === '<t>' && substr($content, -4) != '</t>') {
             $content = mb_substr($content, 3, -4);
@@ -234,7 +241,7 @@ class Post extends DzqModel
             $content = mb_substr($content, 3, -4);
         }
         if (mb_strlen($content) > self::SUMMARY_LENGTH) {
-            $content = mb_substr($content, 0, 80, "UTF-8") . self::SUMMARY_END_WITH;
+            $content = mb_substr($content, 0, 80, 'UTF-8') . self::SUMMARY_END_WITH;
             $content = '<t><r><p>' . $content . '</p></r></t>';
             $content = static::$formatter->render($content);
         }
@@ -328,7 +335,7 @@ class Post extends DzqModel
             $this->content = Str::substr(strip_tags($this->content), 0, $substr) . '...';
         }
 
-        if(is_object($this->content)){
+        if (is_object($this->content)) {
             $this->content = (string)$this->content;
         }
         if ($parse) {
@@ -359,7 +366,7 @@ class Post extends DzqModel
                     $firstContent = $this->thread->getContentByType(self::NOTICE_WITHOUT_LENGTH, $parse);
                 }
             }
-            if(is_object($firstContent)){
+            if (is_object($firstContent)) {
                 $firstContent = (string)$firstContent;
             }
         }
@@ -386,10 +393,11 @@ class Post extends DzqModel
      * @param int $isComment
      * @return static
      */
-    public static function reply( $threadId, $content, $userId, $ip, $port, $replyPostId, $replyUserId, $commentPostId, $commentUserId, $isFirst, $isComment, Post $post=null)
+    public static function reply($threadId, $content, $userId, $ip, $port, $replyPostId, $replyUserId, $commentPostId, $commentUserId, $isFirst, $isComment, Post $post=null)
     {
-        if (!$post->id)
-        $post = new static;
+        if (!$post->id) {
+            $post = new static;
+        }
 
         $post->created_at = Carbon::now();
         $post->thread_id = $threadId;
@@ -608,7 +616,7 @@ class Post extends DzqModel
 
     public function imagesAnswer()
     {
-        return $this->hasMany(Attachment::class, 'type_id')->where('type',Attachment::TYPE_OF_ANSWER )->orderBy('order');
+        return $this->hasMany(Attachment::class, 'type_id')->where('type', Attachment::TYPE_OF_ANSWER)->orderBy('order');
     }
 
     /**
@@ -684,21 +692,19 @@ class Post extends DzqModel
             : Thread::query()->select(['id', 'type'])->where('id', $this->thread_id)->first();
         $this->rewards = 0;
 
-        $rewardTom = ThreadTom::query()->where('thread_id',$thread['id'])
-            ->where('tom_type',TomConfig::TOM_REWARD)
+        $rewardTom = ThreadTom::query()->where('thread_id', $thread['id'])
+            ->where('tom_type', TomConfig::TOM_REWARD)
             ->first();
-        if(!empty($rewardTom)){
+        if (!empty($rewardTom)) {
             $UserWalletLog = UserWalletLog::query()
                 ->where(['post_id' => $this->id, 'thread_id' => $this->thread_id]);
             if ($changeType) {
-                $UserWalletLog->where( 'change_type' , $changeType);
+                $UserWalletLog->where('change_type', $changeType);
             }
             $this->rewards = $UserWalletLog->sum('change_available_amount');
-
         }
         return $this->rewards;
     }
-
 
     public function getPosts($threadIds, $isApproved = true, $deletedAt = true)
     {
@@ -709,14 +715,13 @@ class Post extends DzqModel
                 'is_first' => self::FIRST_YES,
                 'is_comment' => self::COMMENT_NO
             ]);
-        if ($isApproved){
-            $query->where('is_approved',  self::APPROVED_YES);
+        if ($isApproved) {
+            $query->where('is_approved', self::APPROVED_YES);
         }
         if ($deletedAt) {
             $query->whereNull('deleted_at');
         }
         return $query->get()->toArray();
-
     }
 
     public function getContentSummary($post, &$postId = false)
@@ -781,26 +786,53 @@ class Post extends DzqModel
 
     public static function changeContent($content)
     {
+        $tags = Post::getContentTags($content);
         $content = Post::deleteHtmlTags($content);
         if (strlen($content) > Thread::NOTICE_MESSAGE_LENGTH) {
             $content = Post::getThreadTitleOrContent($content, Thread::NOTICE_MESSAGE_LENGTH);
         }
-        return $content;
+        return $content . $tags;
+    }
+
+    // 获取内容中相关标签
+    public static function getContentTags($content)
+    {
+        $tags = '';
+
+        if (strpos($content, '<img') !== false && strpos($content, 'attachmentId-') !== false) {
+            $tags = $tags . '[图片]';
+        }
+        preg_match('/<iframe[^>]*\s+src="([^"]*)"[^>]*>/is', $content, $iframeMatched);
+        if (!empty($iframeMatched)) {
+            $tags = $tags . '[音视频]';
+        }
+        if (strpos($content, '<pre><code>') !== false) {
+            $tags = $tags . '[代码块]';
+        }
+
+        return $tags;
     }
 
     public static function deleteHtmlTags($content)
     {
-        $content = str_replace("<p>", "", $content);
-        $content = str_replace("</p>", "", $content);
-        $content = str_replace(PHP_EOL, "", $content);
+        $content = str_replace(['<p>', '</p>'], ['', ''], $content);
+        $contentArray = explode("\n", $content);
+        foreach ($contentArray as $value) {
+            if (strpos($value, '<pre><code>') !== false) {
+                $content = str_replace($value, '', $content);
+                ;
+            }
+            if (strpos($value, '</code></pre>') !== false) {
+                $content = str_replace($value, '', $content);
+                ;
+            }
+        }
+        $content = str_replace(PHP_EOL, '', $content);
         return $content;
     }
 
     public static function getThreadTitleOrContent($titleOrContent, $length)
     {
-        if (strpos($titleOrContent, '<img') !== false && strpos($titleOrContent, 'attachmentId-') !== false) {
-            $titleOrContent = $titleOrContent . '[图片]';
-        }
         $titleOrContent = strip_tags($titleOrContent);
         if (mb_strlen($titleOrContent) > $length) {
             $titleOrContent = Str::substr($titleOrContent, 0, $length) . '...';
@@ -813,35 +845,52 @@ class Post extends DzqModel
         return $titleOrContent;
     }
 
+    // 获取帖子属性标签
     public static function addTagToThreadContent($threadId, $content)
     {
         $tags = [];
+        $tagList = Thread::getTagList();
         ThreadTag::query()->where('thread_id', $threadId)->get()->each(function ($item) use (&$tags) {
             $tags[$item['tag']][] = $item->toArray();
         });
+
         if (!empty($tags)) {
-            if (isset($tags[ThreadTag::IMAGE])) {
-                $content = $content . '[图片]';
-            }
-            if (isset($tags[ThreadTag::VIDEO])) {
-                $content = $content . '[视频]';
-            }
-            if (isset($tags[ThreadTag::DOC])) {
-                $content = $content . '[附件]';
-            }
-            if (isset($tags[ThreadTag::VOICE])) {
-                $content = $content . '[语音条]';
+            foreach ($tagList as $key => $value) {
+                $tagString = '[' . $value['name_cn'] . ']';
+                if (isset($tags[$key]) && strpos($content, $tagString) === false) {
+                    $content = $content . $tagString;
+                }
             }
         }
+
         return $content;
     }
 
     public static function addTagToPostContent($postId, $content)
     {
+        if (strpos($content, '[图片]')) {
+            return $content;
+        }
         $postAttachment = Attachment::query()->where('type_id', $postId)->get()->toArray();
         if (!empty($postAttachment)) {
             $content = $content . '[图片]';
         }
         return $content;
+    }
+
+    public static function changeOriginNotification($post)
+    {
+        $tags = Post::getContentTags($post->content);
+        $post = Post::changeNotifitionPostContent($post);
+        $result = $post->getSummaryContent(Post::NOTICE_WITHOUT_LENGTH);
+        if (!empty($result['first_content']) && $result['first_content'] != $result['content']) {
+            if ($post->is_first) {
+                $result['first_content'] = $result['first_content'] . $tags;
+            } else {
+                $result['first_content'] = $result['content'];
+            }
+        }
+
+        return [$post, $result];
     }
 }

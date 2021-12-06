@@ -1,7 +1,6 @@
 <?php
-
 /**
- * Copyright (C) 2020 Tencent Cloud.
+ * Copyright (C) 2021 Tencent Cloud.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,65 +17,64 @@
 
 namespace App\Api\Controller\Category;
 
-use App\Api\Serializer\CategorySerializer;
+use App\Common\ResponseCode;
 use App\Models\Category;
-use App\Models\User;
-use Discuz\Api\Controller\AbstractListController;
-use Illuminate\Support\Collection;
-use Psr\Http\Message\ServerRequestInterface;
-use Tobscure\JsonApi\Document;
-use Tobscure\JsonApi\Exception\InvalidParameterException;
+use App\Repositories\UserRepository;
+use Discuz\Base\DzqController;
 
-class ListCategoriesController extends AbstractListController
+class ListCategoriesController extends DzqController
 {
-    /**
-     * {@inheritdoc}
-     */
-    public $serializer = CategorySerializer::class;
+    private $userRepo;
 
-    /**
-     * {@inheritdoc}
-     */
-    public $optionalInclude = ['moderators'];
-
-    /**
-     * @param ServerRequestInterface $request
-     * @param Document $document
-     * @return Collection
-     * @throws InvalidParameterException
-     */
-    protected function data(ServerRequestInterface $request, Document $document)
+    public function __construct(UserRepository $userRepo)
     {
-        /** @var User $actor */
-        $actor = $request->getAttribute('actor');
-        $filter = $this->extractFilter($request);
-        $include = $this->extractInclude($request);
+        $this->userRepo = $userRepo;
+    }
 
-        $query = Category::query();
+    protected function checkRequestPermissions(UserRepository $userRepo)
+    {
+        return true;
+    }
 
-        // 根据传参返回可发布内容的分类，否则返回可查看内容的分类
-        if ($actor->exists && isset($filter['createThread']) && $filter['createThread']) {
-            $query->whereNotIn('id', Category::getIdsWhereCannot($actor, 'createThread'));
-        } else {
-            $query->whereNotIn('id', Category::getIdsWhereCannot($actor, 'viewThreads'));
+    public function main()
+    {
+        $categories = Category::query()
+            ->select([
+                'id as pid', 'id as categoryId', 'name', 'description', 'icon', 'sort', 'property', 'thread_count as threadCount', 'parentid'
+            ])
+            ->orderBy('parentid', 'asc')
+            ->orderBy('sort')
+            ->get()->toArray();
+
+        $categoriesFather = [];
+        $categoriesChild = [];
+
+        foreach ($categories as $category) {
+            $category['canCreateThread'] = $this->userRepo->canCreateThread($this->user, $category['categoryId']);
+            $category['searchIds'] = [(int)$category['categoryId']];
+
+            // 二级子类集合
+            if ($category['parentid'] !== 0) {
+                $categoriesChild[$category['parentid']][] = $category;
+            }
+
+            if ($category['parentid'] == 0 && $this->userRepo->canViewThreads($this->user, $category['categoryId'])) {
+                $categoriesFather[] = $category;
+            }
+        }
+        // 获取一级分类的二级子类
+        foreach ($categoriesFather as $key => $value) {
+            if (isset($categoriesChild[$value['categoryId']])) {
+                $categoriesFather[$key]['searchIds'] = array_merge([$value['searchIds']], array_column($categoriesChild[$value['categoryId']], 'categoryId'));
+                $categoriesFather[$key]['children'] = $categoriesChild[$value['categoryId']];
+            } else {
+                $categoriesFather[$key]['children'] = [];
+            }
         }
 
-        $categories = $query->where('parentid',0)->orderBy('sort')->get();
-
-        // 分类版主
-        if (in_array('moderators', $include)) {
-            $users = User::query()->findMany(
-                $categories->pluck('moderators')->flatten()->unique()
-            );
-
-            $categories->map(function (Category $category) use ($users) {
-                $category->setRelation('moderatorUsers', $users->whereIn('id', $category->moderators));
-            });
-
-            // 因关系与字段重名，序列化时使用 moderatorUsers，为避免 loadMissing 异常，移除 moderators
-            $include = array_diff($include, ['moderators']);
+        if (empty($categoriesFather)) {
+            $this->outPut(ResponseCode::UNAUTHORIZED, '没有浏览权限');
         }
-
-        return $categories->loadMissing($include);
+        $this->outPut(ResponseCode::SUCCESS, '', $categoriesFather);
     }
 }

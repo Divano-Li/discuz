@@ -18,119 +18,52 @@
 
 namespace App\Api\Controller\Dialog;
 
-use App\Api\Serializer\DialogSerializer;
+use App\Common\ResponseCode;
+use App\Models\Dialog;
+use App\Models\DialogMessage;
 use App\Models\User;
-use App\Repositories\DialogRepository;
-use Discuz\Api\Controller\AbstractListController;
+use App\Providers\DialogMessageServiceProvider;
+use App\Repositories\UserRepository;
 use Discuz\Auth\AssertPermissionTrait;
-use Discuz\Auth\Exception\NotAuthenticatedException;
-use Discuz\Http\UrlGenerator;
-use Illuminate\Database\Eloquent\Collection;
-use Illuminate\Support\Str;
-use Psr\Http\Message\ServerRequestInterface;
-use Tobscure\JsonApi\Document;
-use Tobscure\JsonApi\Exception\InvalidParameterException;
+use Discuz\Base\DzqController;
 
-class ListDialogController extends AbstractListController
+class ListDialogController extends DzqController
 {
     use AssertPermissionTrait;
 
-    /**
-     * {@inheritdoc}
-     */
-    public $serializer = DialogSerializer::class;
-
-    /**
-     * @var DialogRepository
-     */
-    protected $dialog;
-
-    /**
-     * @var UrlGenerator
-     */
-    protected $url;
-
-    protected $tablePrefix;
-
-    /**
-     * @var int|null
-     */
-    public $dialogCount;
-
-    public $sortFields = [
-        'dialogMessageId',
-        'createdAt',
+    public $providers = [
+        DialogMessageServiceProvider::class,
     ];
 
-    /**
-     * {@inheritdoc}
-     */
-    public $optionalInclude = ['sender','recipient','dialogMessage','sender.groups','recipient.groups'];
-
-    /* The relationships that are included by default.
-     *
-     * @var array
-     */
-    public $include = [];
-
-    /**
-     * @param DialogRepository $dialog
-     * @param UrlGenerator $url
-     */
-    public function __construct(DialogRepository $dialog, UrlGenerator $url)
+    protected function checkRequestPermissions(UserRepository $userRepo)
     {
-        $this->dialog = $dialog;
-        $this->url = $url;
-        $this->tablePrefix = config('database.connections.mysql.prefix');
+        if ($this->user->isGuest()) {
+            $this->outPut(ResponseCode::JUMP_TO_LOGIN);
+        }
+        return true;
     }
 
-    /**
-     * 我的关注
-     * {@inheritdoc}
-     * @throws InvalidParameterException
-     * @throws NotAuthenticatedException
-     */
-    protected function data(ServerRequestInterface $request, Document $document)
+    public function main()
     {
-        $actor = $request->getAttribute('actor');
+        $user = $this->user;
 
-        $this->assertRegistered($actor);
+        $page = $this->inPut('page') ?: 1;
+        $perPage = $this->inPut('perPage') ?: 10;
 
-        $limit = $this->extractLimit($request);
-        $offset = $this->extractOffset($request);
-        $include = $this->extractInclude($request);
-        $sort = $this->extractSort($request);
+        $pageData = $this->search($user, $perPage, $page);
 
-        $dialogs = $this->search($actor, $sort, $limit, $offset);
-
-        $document->addPaginationLinks(
-            $this->url->route('dialog.list'),
-            $request->getQueryParams(),
-            $offset,
-            $limit,
-            $this->dialogCount
-        );
-
-        $dialogs->loadMissing($include);
-
-        $document->setMeta([
-            'total' => $this->dialogCount,
-            'pageCount' => ceil($this->dialogCount / $limit),
-        ]);
-
-        return $dialogs;
+        $this->outPut(ResponseCode::SUCCESS, '', $pageData);
     }
 
-    /**
-     * @param User $actor
-     * @param null $limit
-     * @param int $offset
-     * @param $sort
-     * @return Collection
-     */
-    public function search(User $actor, $sort, $limit = null, $offset = 0)
+    public function search(User $user, $perPage, $page)
     {
-        $query = $this->dialog->query();
+        $query = Dialog::query()
+            ->with([
+                'sender:id,username,avatar,avatar_at,nickname',
+                'recipient:id,username,avatar,avatar_at,nickname',
+                'dialogMessage',
+            ]);
+        $tablePrefix = config('database.connections.mysql.prefix');
 
         $query->distinct('dialog.id')
             ->select('dialog.*')
@@ -140,22 +73,101 @@ class ListDialogController extends AbstractListController
                 '=',
                 'dialog_message.dialog_id'
             )
-            ->where(function ($query) use ($actor) {
-                $query->where('dialog.sender_user_id', $actor->id)
-                    ->whereRaw($this->tablePrefix. 'dialog_message.`created_at` > IFNULL( ' .$this->tablePrefix. 'dialog.`sender_deleted_at`, 0 )');
+            ->where('dialog_message_id', '>', 0)
+            ->where(function ($query) use ($tablePrefix, $user) {
+                $query->where('dialog.sender_user_id', $user->id)
+                    ->whereRaw("{$tablePrefix}dialog_message.`created_at` > IFNULL({$tablePrefix}dialog.`sender_deleted_at`, 0 )");
             })
-            ->orWhere(function ($query) use ($actor) {
-                $query->where('dialog.recipient_user_id', $actor->id)
-                    ->whereRaw($this->tablePrefix. 'dialog_message.`created_at` > IFNULL( ' .$this->tablePrefix. 'dialog.`recipient_deleted_at`, 0 )');
-            });
+            ->orWhere(function ($query) use ($tablePrefix, $user) {
+                $query->where('dialog.recipient_user_id', $user->id)
+                    ->whereRaw("{$tablePrefix}dialog_message.`created_at` > IFNULL({$tablePrefix}dialog.`recipient_deleted_at`, 0 )");
+            })
+            ->orderBy('dialog_message_id', 'desc');
 
-        $this->dialogCount = $limit > 0 ? $query->count() : null;
+        $pageData = $this->pagination($page, $perPage, $query, false);
 
-        $query->skip($offset)->take($limit);
+        $pageData['pageData'] = $pageData['pageData']->map(function (Dialog $i) {
+            $actor = $this->user;
 
-        foreach ((array) $sort as $field => $order) {
-            $query->orderBy(Str::snake($field), $order);
-        }
-        return $query->get();
+            $dQuery = Dialog::query()
+                ->where('sender_user_id', $actor->id)
+                ->orWhere('recipient_user_id', $actor->id)
+                ->get('id')->toArray();
+
+            $dialogIds = array_column($dQuery, 'id');
+
+            $dMQuery = DialogMessage::query()
+                ->whereIn('dialog_id', $dialogIds)
+                ->where('user_id', '!=', $actor->id)
+                ->where('status', DialogMessage::NORMAL_MESSAGE)
+                ->get()->toArray();
+
+            $newList = [];
+            foreach ($dMQuery as $key => $value) {
+                if (isset($newList[$value['user_id']])) {
+                    if ($value['read_status'] == 0) {
+                        $newList[$value['user_id']]['unreadCount'] = $newList[$value['user_id']]['unreadCount'] + 1;
+                    }
+                    $newList[$value['user_id']]['message'][] = $value;
+                } else {
+                    $newList[$value['user_id']]['unreadCount'] = 0;
+                    if ($value['read_status'] == 0) {
+                        $newList[$value['user_id']]['unreadCount'] = 1;
+                    }
+                    $newList[$value['user_id']]['message'][] = $value;
+                }
+            }
+            $sendUser = null;
+            $recipientUser = null;
+            if (!empty($i->sender)) {
+                $sendUser = [
+                    'id' => $i->sender->id,
+                    'avatar' => !empty($i->sender->avatar) ? $i->sender->avatar : '',
+                    'username' => $i->sender->username,
+                    'nickname' => $i->sender->nickname
+                ];
+            }
+            if (!empty($i->recipient)) {
+                $recipientUser = [
+                    'id' => $i->recipient->id,
+                    'avatar' => !empty($i->recipient->avatar) ? $i->recipient->avatar : '',
+                    'username' => $i->recipient->username,
+                    'nickname' => $i->recipient->nickname
+                ];
+            }
+
+            $msg = $i->dialogMessage;
+            $msg = $msg
+                ? [
+                    'id' => $msg->id,
+                    'userId' => $msg->user_id,
+                    'unreadCount' => $newList[$msg->user_id]['unreadCount'] ?? 0,
+                    'dialogId' => $msg->dialog_id,
+                    'attachmentId' => $msg->attachment_id,
+                    'summary' => $msg->summary,
+                    'messageText' => $msg->getMessageText(),
+                    'messageTextHtml' => $msg->formatMessageText(),
+                    'imageUrl' => $msg->getImageUrlMessageText(),
+                    'updatedAt' => optional($msg->updated_at)->format('Y-m-d H:i:s'),
+                    'createdAt' => optional($msg->created_at)->format('Y-m-d H:i:s'),
+                ]
+                : null;
+
+            return [
+                'id' => $i->id,
+                'dialogMessageId' => $i->dialog_message_id ?: 0,
+                'senderUserId' => $i->sender_user_id,
+                'recipientUserId' => $i->recipient_user_id,
+                'senderReadAt' => optional($i->sender_read_at)->format('Y-m-d H:i:s'),
+                'recipientReadAt' => optional($i->recipient_read_at)->format('Y-m-d H:i:s'),
+                'updatedAt' => optional($i->updated_at)->format('Y-m-d H:i:s'),
+                'createdAt' => optional($i->created_at)->format('Y-m-d H:i:s'),
+                'sender' => $sendUser,
+                'recipient' => $recipientUser,
+                'dialogMessage' => $msg
+            ];
+        });
+
+        return $pageData;
     }
 }

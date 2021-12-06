@@ -18,32 +18,28 @@
 
 namespace App\Api\Controller\Settings;
 
-use App\Api\Serializer\SettingSerializer;
+use App\Common\CacheKey;
+use App\Common\ResponseCode;
+use App\Models\Setting;
 use Carbon\Carbon;
-use Discuz\Api\Controller\AbstractResourceController;
-use Discuz\Auth\AssertPermissionTrait;
-use Discuz\Auth\Exception\PermissionDeniedException;
+use Discuz\Base\DzqAdminController;
+use Discuz\Base\DzqCache;
 use Discuz\Contracts\Setting\SettingsRepository;
 use Discuz\Http\UrlGenerator;
 use Exception;
 use Illuminate\Contracts\Filesystem\Factory as FileFactory;
-use Illuminate\Contracts\Filesystem\FileNotFoundException;
 use Illuminate\Contracts\Validation\Factory;
-use Illuminate\Support\Arr;
 use Illuminate\Validation\Rule;
-use Illuminate\Validation\ValidationException;
-use Psr\Http\Message\ServerRequestInterface;
 use Symfony\Component\HttpFoundation\File\UploadedFile;
-use Tobscure\JsonApi\Document;
 
-class UploadLogoController extends AbstractResourceController
+class UploadLogoController extends DzqAdminController
 {
-    use AssertPermissionTrait;
+    public function prefixClearCache($user)
+    {
+        DzqCache::delKey(CacheKey::SETTINGS);
+    }
 
-    /**
-     * @var string
-     */
-    public $serializer = SettingSerializer::class;
+    protected $settings;
 
     /**
      * @var Factory
@@ -54,11 +50,6 @@ class UploadLogoController extends AbstractResourceController
      * @var FileFactory
      */
     protected $filesystem;
-
-    /**
-     * @var SettingsRepository
-     */
-    protected $settings;
 
     /**
      * @var UrlGenerator
@@ -81,39 +72,24 @@ class UploadLogoController extends AbstractResourceController
     /**
      * @param Factory $validator
      * @param FileFactory $filesystem
-     * @param SettingsRepository $settings
      * @param UrlGenerator $url
      */
-    public function __construct(Factory $validator, FileFactory $filesystem, SettingsRepository $settings, UrlGenerator $url)
+    public function __construct(Factory $validator, FileFactory $filesystem, UrlGenerator $url, SettingsRepository $settings)
     {
         $this->validator = $validator;
         $this->filesystem = $filesystem;
-        $this->settings = $settings;
         $this->url = $url;
+        $this->settings = $settings;
     }
 
-    /**
-     * @param ServerRequestInterface $request
-     * @param Document $document
-     * @return string[]
-     * @throws FileNotFoundException
-     * @throws PermissionDeniedException
-     * @throws ValidationException
-     * @throws Exception
-     */
-    protected function data(ServerRequestInterface $request, Document $document)
+    public function main()
     {
-        $actor = $request->getAttribute('actor');
+        UrlGenerator::setRequest($this->request);
 
-        $this->assertCan($actor, 'setting.site');
-
-        UrlGenerator::setRequest($request);
-
-        $type = Arr::get($request->getParsedBody(), 'type', 'logo');
-        $file = Arr::get($request->getUploadedFiles(), 'logo');
-
+        $type = $this->inPut('type') ? $this->inPut('type') : 'logo';
+        $file = $this->request->getUploadedFiles()['logo'];
         if (! $file) {
-            throw new FileNotFoundException('file_not_found');
+            $this->outPut(ResponseCode::INVALID_PARAMETER, 'file_not_found');
         }
 
         $verifyFile = new UploadedFile(
@@ -145,7 +121,7 @@ class UploadLogoController extends AbstractResourceController
 
         try {
             // 开启 cos 时，再存一份，优先使用
-            if ($this->settings->get('qcloud_cos', 'qcloud')) {
+            if (Setting::getValue('qcloud_cos', 'qcloud')) {
                 $cosStream = clone $file->getStream();
 
                 $this->filesystem->disk('cos')->put($fileName, $cosStream);
@@ -153,15 +129,15 @@ class UploadLogoController extends AbstractResourceController
 
             $this->filesystem->disk('public')->put($fileName, $file->getStream());
         } catch (Exception $e) {
-            throw new $e;
+            $this->outPut(ResponseCode::INVALID_PARAMETER, '', $e);
         }
 
         $this->settings->set($type, $fileName, $type === 'watermark_image' ? 'watermark' : 'default');
 
-        return [
+        $this->outPut(ResponseCode::SUCCESS, '', [
             'key' => 'logo',
             'value' => $this->url->to('/storage/'.$fileName) . '?' . Carbon::now()->timestamp,
             'tag' => 'default'
-        ];
+        ]);
     }
 }

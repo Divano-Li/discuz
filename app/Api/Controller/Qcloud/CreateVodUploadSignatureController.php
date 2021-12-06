@@ -18,41 +18,39 @@
 
 namespace App\Api\Controller\Qcloud;
 
-use App\Api\Serializer\SignatureSerializer;
 use App\Commands\Qcloud\CreateVodUploadSignature;
-use Discuz\Api\Controller\AbstractCreateController;
+use App\Common\ResponseCode;
+use App\Repositories\UserRepository;
+use Discuz\Base\DzqController;
 use Illuminate\Contracts\Bus\Dispatcher;
-use Illuminate\Support\Arr;
-use Psr\Http\Message\ServerRequestInterface;
-use Tobscure\JsonApi\Document;
 
-class CreateVodUploadSignatureController extends AbstractCreateController
+class CreateVodUploadSignatureController extends DzqController
 {
-    public $serializer = SignatureSerializer::class;
-
-    /**
-     * @var Dispatcher
-     */
     protected $bus;
 
-    /**
-     * @param Dispatcher $bus
-     */
     public function __construct(Dispatcher $bus)
     {
         $this->bus = $bus;
     }
 
-    /**
-     * {@inheritdoc}
-     */
-    protected function data(ServerRequestInterface $request, Document $document)
+    protected function checkRequestPermissions(UserRepository $userRepo)
     {
-        $actor = $request->getAttribute('actor');
-        $data = Arr::get($request->getParsedBody(), 'data.attributes', 0);
+        return true;
+    }
 
-        return $this->bus->dispatch(
+    public function main()
+    {
+        $actor = $this->user;
+
+        $data = $this->inPut('data');
+
+        $result =  $this->bus->dispatch(
             new CreateVodUploadSignature($actor, $data)
         );
+
+        $data = $this->camelData($result);
+        $datas['token'] = $data[0];
+
+        $this->outPut(ResponseCode::SUCCESS, '', $datas);
     }
 }

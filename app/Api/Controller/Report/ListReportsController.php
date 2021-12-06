@@ -18,172 +18,120 @@
 
 namespace App\Api\Controller\Report;
 
-use App\Api\Serializer\ReportsSerializer;
+use App\Common\ResponseCode;
+use App\Models\GroupUser;
 use App\Models\Report;
 use App\Models\User;
-use Discuz\Api\Controller\AbstractListController;
-use Discuz\Auth\AssertPermissionTrait;
-use Discuz\Http\UrlGenerator;
-use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Database\Eloquent\Collection;
-use Illuminate\Support\Arr;
-use Illuminate\Support\Str;
-use Psr\Http\Message\ServerRequestInterface;
-use Tobscure\JsonApi\Document;
+use Discuz\Base\DzqAdminController;
 
-class ListReportsController extends AbstractListController
+class ListReportsController extends DzqAdminController
 {
-    use AssertPermissionTrait;
-
-    /**
-     * {@inheritdoc}
-     */
-    public $serializer = ReportsSerializer::class;
-
-    /**
-     * 传输关系
-     *
-     * {@inheritdoc}
-     */
-    public $optionalInclude = [];
-
-    /**
-     * 默认关系
-     *
-     * {@inheritdoc}
-     */
-    public $include = [
-        'user',
-    ];
-
-    /**
-     * {@inheritdoc}
-     */
-    public $sortFields = [
-        'created_at',
-        'updated_at',
-    ];
-
-    /**
-     * {@inheritdoc}
-     */
-    public $sort = [
-        'created_at' => 'desc',
-    ];
-
-    /**
-     * @var UrlGenerator
-     */
-    protected $url;
-
-    /**
-     * @var int|null
-     */
-    protected $reportCount;
-
-    /**
-     * @param UrlGenerator $url
-     */
-    public function __construct(UrlGenerator $url)
+    public function main()
     {
-        $this->url = $url;
+        $filter = $this->inPut('filter');
+        $currentPage = $this->inPut('page');
+        $perPage = $this->inPut('perPage');
+        $reports = $this->filterReports($filter, $currentPage, $perPage);
+        $reportsList = $reports['pageData'];
+
+        $userIds = array_unique(array_column($reportsList, 'user_id'));
+        $groups = GroupUser::instance()->getGroupInfo($userIds);
+        $groups = array_column($groups, null, 'user_id');
+        $users = User::instance()->getUsers($userIds);
+        $users = array_column($users, null, 'id');
+        $reportList = [];
+        if ($reportsList) {
+            $result = [];
+            foreach ($reportsList as $report) {
+                $userId = $report['user_id'];
+                $user = [];
+                if (!empty($users[$userId])) {
+                    $user = $this->getUserInfo($users[$userId]);
+                }
+                $group = [];
+                if (!empty($groups[$userId])) {
+                    $group = $this->getGroupInfo($groups[$userId]);
+                }
+                $result[] = [
+                    'user' => $user,
+                    'group' => $group,
+                    'report' => $report,
+                ];
+            }
+            $reports['pageData'] = $result;
+            foreach ($reports['pageData'] as $k=>$v) {
+                $reportList['pageData'][$k]['user'] = $v['user'];
+                $reportList['pageData'][$k]['group'] = $v['group'];
+                $reportList['pageData'][$k]['report']['id']=$v['report']['id'];
+                $reportList['pageData'][$k]['report']['userId']=$v['report']['user_id'];
+                $reportList['pageData'][$k]['report']['threadId']=$v['report']['thread_id'];
+                $reportList['pageData'][$k]['report']['postId']=$v['report']['post_id'];
+                $reportList['pageData'][$k]['report']['type']=$v['report']['type'];
+                $reportList['pageData'][$k]['report']['reason']=$v['report']['reason'];
+                $reportList['pageData'][$k]['report']['status']=$v['report']['status'];
+                $reportList['pageData'][$k]['report']['createdAt']=$v['report']['created_at'];
+                $reportList['pageData'][$k]['report']['updatedAt']=$v['report']['updated_at'];
+            }
+            $reportList['currentPage']=$reports['currentPage'];
+            $reportList['perPage']=$reports['perPage'];
+            $reportList['firstPageUrl']=$reports['firstPageUrl'];
+            $reportList['nextPageUrl']=$reports['nextPageUrl'];
+            $reportList['prePageUrl']=$reports['prePageUrl'];
+            $reportList['pageLength']=$reports['pageLength'];
+            $reportList['totalPage']=$reports['totalPage'];
+            $reportList['totalCount']=$reports['totalCount'];
+        }
+
+        $this->outPut(ResponseCode::SUCCESS, '', $reportList);
     }
 
-    /**
-     * {@inheritdoc}
-     *
-     * @param ServerRequestInterface $request
-     * @param Document $document
-     * @return \Illuminate\Database\Eloquent\Builder[]|\Illuminate\Database\Eloquent\Collection|mixed
-     * @throws \Discuz\Auth\Exception\PermissionDeniedException
-     * @throws \Tobscure\JsonApi\Exception\InvalidParameterException
-     */
-    protected function data(ServerRequestInterface $request, Document $document)
+    private function filterReports($filter, $currentPage, $perPage)
     {
-        $actor = $request->getAttribute('actor');
-        $this->assertPermission($actor->isAdmin());
+        $reports = Report::query();
+        if (!empty($filter['username'])) {
+            $this->dzqValidate($filter, [
+                'username' => 'string|max:200'
+            ]);
+            $reports->whereIn('user_id', User::query()->where('username', 'like', "%{$filter['username']}%")->pluck('id'));
+        }
+        if (isset($filter['status']) && strlen($filter['status']) > 0) {
+            $this->dzqValidate($filter, [
+                'status' => 'integer|in:0,1'
+            ]);
+            $reports->where('status', $filter['status']);
+        }
 
-        $filter = $this->extractFilter($request);
-        $sort = $this->extractSort($request);
-        $limit = $this->extractLimit($request);
-        $offset = $this->extractOffset($request);
-        $include = $this->extractInclude($request);
-
-        $reports = $this->search($actor, $filter, $sort, $limit, $offset);
-
-        $document->addPaginationLinks(
-            $this->url->route('reports.list'),
-            $request->getQueryParams(),
-            $offset,
-            $limit,
-            $this->reportCount
-        );
-
-        $document->setMeta([
-            'total' => $this->reportCount,
-            'pageCount' => ceil($this->reportCount / $limit),
-        ]);
-
-        $reports->loadMissing($include);
-
+        if (isset($filter['type']) && strlen($filter['type']) > 0) {
+            $this->dzqValidate($filter, [
+                'type' => 'integer|in:0,1,2'
+            ]);
+            $reports->where('type', $filter['type']);
+        }
+        if (!empty($filter['startTime']) && !empty($filter['endTime'])) {
+            $filter['endTime'] =  date('Y-m-d', strtotime('+1 day', strtotime($filter['endTime'])));
+            $reports->whereBetween('created_at', [$filter['startTime'], $filter['endTime']]);
+        }
+        $reports->orderByDesc('created_at');
+        $reports = $this->pagination($currentPage, $perPage, $reports);
         return $reports;
     }
 
-    /**
-     * @param $actor
-     * @param $filter
-     * @param $sort
-     * @param null $limit
-     * @param int $offset
-     * @return Collection
-     */
-    public function search($actor, $filter, $sort, $limit = null, $offset = 0)
+    private function getUserInfo($user)
     {
-        $query = Report::query();
-
-        $this->applyFilters($query, $filter, $actor);
-
-        $this->reportCount = $limit > 0 ? $query->count() : null;
-
-        $query->skip($offset)->take($limit);
-
-        foreach ((array)$sort as $field => $order) {
-            $query->orderBy(Str::snake($field), $order);
-        }
-
-        return $query->get();
+        return [
+            'pid' => $user['id'],
+            'userId' => $user['id'],
+            'userName' => $user['username'],
+        ];
     }
 
-    /**
-     * @param Builder $query
-     * @param array $filter
-     * @param User $actor
-     */
-    private function applyFilters(Builder $query, array $filter, User $actor)
+    private function getGroupInfo($group)
     {
-        $startTime = Arr::get($filter, 'start_time', '');
-        $endTime = Arr::get($filter, 'end_time', '');
-        $username = Arr::get($filter, 'username', '');
-
-        if (Arr::has($filter, 'status')) {
-            $query->where('status', Arr::get($filter, 'status'));
-        }
-
-        if (Arr::has($filter, 'type')) {
-            $query->where('type', Arr::get($filter, 'type'));
-        }
-
-        $query->when($startTime, function ($query, $startTime) {
-            $query->where('created_at', '>', $startTime);
-        });
-
-        $query->when($endTime, function ($query, $endTime) {
-            $endTime =  date("Y-m-d",strtotime("+1 day",strtotime($endTime)));
-            $query->where('created_at', '<', $endTime);
-        });
-
-        $query->when($username, function ($query, $username) {
-            $query->whereIn('user_id', User::query()->where('username', 'like', "%{$username}%")->pluck('id'));
-        });
+        return [
+            'pid' => $group['group_id'],
+            'groupId' => $group['group_id'],
+            'groupName' => $group['groups']['name'],
+            'groupIcon' => $group['groups']['icon']
+        ];
     }
 }

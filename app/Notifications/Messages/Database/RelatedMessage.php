@@ -43,6 +43,7 @@ class RelatedMessage extends SimpleMessage
             'user_id' => $this->actor->id,
             'thread_id' => 0, // 必传
             'thread_username' => '', // 必传主题用户名
+            'thread_nickname' => '', // 必传主题昵称
             'thread_title' => '',
             'thread_created_at' => '',
             'post_id' => $this->post->id,
@@ -61,7 +62,8 @@ class RelatedMessage extends SimpleMessage
      */
     public function changeBuild(&$build)
     {
-        $result = $this->post->getSummaryContent(Post::NOTICE_LENGTH);
+        $oldContent = $this->post->content;
+        [$this->post, $result] = Post::changeOriginNotification($this->post);
 
         /**
          * 判断是否是楼中楼的回复
@@ -83,14 +85,17 @@ class RelatedMessage extends SimpleMessage
             // 不是长文没有标题则使用首帖内容
             $firstContent = $result['first_content'];
 
-            $build['post_content'] = $content == $firstContent ? '' : $content ;
+            // $build['post_content'] = $content == $firstContent ? '' : $content ;
+            $build['post_content'] = $content ?: $firstContent;
             $build['post_created_at'] = $this->post->formatDate('created_at');
         }
 
         // 主题数据
         $build['thread_id'] = $this->post->thread->id;
         $build['thread_username'] = $this->post->thread->user->username;
+        $build['thread_nickname'] = $this->post->thread->user->nickname;
         $build['thread_title'] = $firstContent ?? $result['first_content'];
         $build['thread_created_at'] = $this->post->thread->formatDate('created_at');
+        $this->post->content = $oldContent;
     }
 }

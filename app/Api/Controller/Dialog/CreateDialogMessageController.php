@@ -1,36 +1,20 @@
 <?php
 
-/**
- * Copyright (C) 2020 Tencent Cloud.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
 namespace App\Api\Controller\Dialog;
 
-use App\Api\Serializer\DialogMessageSerializer;
 use App\Commands\Dialog\CreateDialogMessage;
-use Discuz\Api\Controller\AbstractCreateController;
+use App\Common\ResponseCode;
+use App\Common\Utils;
+use App\Models\DialogMessage;
+use App\Providers\DialogMessageServiceProvider;
+use App\Repositories\UserRepository;
+use Discuz\Base\DzqController;
 use Illuminate\Contracts\Bus\Dispatcher;
 use Illuminate\Contracts\Validation\Factory;
-use Illuminate\Support\Arr;
-use Psr\Http\Message\ServerRequestInterface;
-use Tobscure\JsonApi\Document;
+use Illuminate\Validation\ValidationException;
 
-class CreateDialogMessageController extends AbstractCreateController
+class CreateDialogMessageController extends DzqController
 {
-    public $serializer = DialogMessageSerializer::class;
-
     /**
      * @var Dispatcher
      */
@@ -41,34 +25,64 @@ class CreateDialogMessageController extends AbstractCreateController
      */
     protected $validation;
 
-    public $include = ['attachment'];
+    public $providers = [
+        DialogMessageServiceProvider::class,
+    ];
 
-    /**
-     * @param Dispatcher $bus
-     * @param Factory $validation
-     */
-    public function __construct(Dispatcher $bus, Factory  $validation)
+    public function __construct(Dispatcher $bus, Factory $validation)
     {
         $this->bus = $bus;
         $this->validation = $validation;
     }
 
-    /**
-     * {@inheritdoc}
-     */
-    protected function data(ServerRequestInterface $request, Document $document)
+    protected function checkRequestPermissions(UserRepository $userRepo)
     {
-        $actor = $request->getAttribute('actor');
-        $attributes = Arr::get($request->getParsedBody(), 'data.attributes');
-        $this->validation->make($attributes, [
-            'dialog_id'     => 'required|int',
-            'message_text'  => 'sometimes|max:450',
-            'image_url'     => 'sometimes|string',
-            'attachment_id' => 'required_with:image_url|int',
-        ])->validate();
+        if ($this->user->isGuest()) {
+            $this->outPut(ResponseCode::JUMP_TO_LOGIN);
+        }
+        if (DialogMessage::isDisable()) {
+            $this->outPut(ResponseCode::DIALOG_MESSAGE_DISABLE);
+        }
+        return $userRepo->canCreateDialog($this->user);
+    }
 
-        return $this->bus->dispatch(
-            new CreateDialogMessage($actor, $attributes)
-        );
+    public function main()
+    {
+        $user = $this->user;
+        $data = $this->request->getParsedBody()->toArray();
+
+        try {
+            $this->validation->make($data, [
+                'dialogId' => 'required|int',
+                'messageText'  => 'sometimes|max:450',
+                'imageUrl'     => 'required_with:attachmentId|string',
+                'attachmentId' => 'required_with:imageUrl|int|min:1',
+                'isImage' => 'required|bool'
+            ])->validate();
+        } catch (ValidationException $e) {
+            $this->outPut(ResponseCode::INVALID_PARAMETER, $e->validator->getMessageBag()->first());
+        }
+
+        if (!$data['isImage'] && empty($data['messageText']) && empty($data['attachmentId'])) {
+            $this->outPut(ResponseCode::INVALID_PARAMETER, '发送内容不能为空！');
+        }
+
+        if (!empty($data['messageText']) ||
+           (!empty($data['attachmentId']) && !empty($data['imageUrl']))) {
+            $data['status'] = DialogMessage::NORMAL_MESSAGE;
+        } else {
+            $data['status'] = DialogMessage::EMPTY_MESSAGE;
+        }
+
+        try {
+            $data = Utils::arrayKeysToSnake($data);
+            $dialogMessage = $this->bus->dispatch(
+                new CreateDialogMessage($user, $data)
+            );
+        } catch (\Exception $e) {
+            $this->outPut(ResponseCode::INVALID_PARAMETER, $e->getMessage());
+        }
+
+        $this->outPut(ResponseCode::SUCCESS, '已发送', ['dialogMessageId' => $dialogMessage->id]);
     }
 }

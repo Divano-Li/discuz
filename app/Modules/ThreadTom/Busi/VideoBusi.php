@@ -1,6 +1,7 @@
 <?php
+
 /**
- * Copyright (C) 2021 Tencent Cloud.
+ * Copyright (C) 2020 Tencent Cloud.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,7 +18,6 @@
 
 namespace App\Modules\ThreadTom\Busi;
 
-
 use App\Common\CacheKey;
 use Discuz\Base\DzqCache;
 use App\Models\Thread;
@@ -28,7 +28,6 @@ use Discuz\Qcloud\QcloudTrait;
 
 class VideoBusi extends TomBaseBusi
 {
-
     use QcloudTrait;
 
     public function create()
@@ -37,12 +36,6 @@ class VideoBusi extends TomBaseBusi
         $video = ThreadVideo::query()->where('id', $videoId)->first();
         if (!empty($video) && !empty($this->threadId)) {
             $video->thread_id = $this->threadId;
-
-            if ($video->type === ThreadVideo::TYPE_OF_VIDEO) {
-                $video->status = ThreadVideo::VIDEO_STATUS_TRANSCODING;
-            } else {
-                $video->status = ThreadVideo::VIDEO_STATUS_SUCCESS;
-            }
             $video->save();
 
             $thread = Thread::query()->where('id', $this->threadId)->first();
@@ -54,7 +47,6 @@ class VideoBusi extends TomBaseBusi
                 if ($taskflow && $taskflow['value']) {
                     // 转动图
                     $this->processMediaByProcedure($video->file_id, $taskflow['value']);
-
                 }
             }
         }
@@ -68,15 +60,20 @@ class VideoBusi extends TomBaseBusi
         if (!empty($video) && !empty($this->threadId)) {
             $video->thread_id = $this->threadId;
             $video->save();
+
             $thread = Thread::query()->where('id', $this->threadId)->first();
-            if ($video->type == ThreadVideo::TYPE_OF_VIDEO && $thread && $thread['is_draft'] == 0 && $video->status == ThreadVideo::VIDEO_STATUS_TRANSCODING) {
-                // 发布文章时，转码
-                $this->transcodeVideo($video->file_id, 'TranscodeTaskSet');
-                // 转动图
-                $taskflow = Setting::query()->where('key', 'qcloud_vod_taskflow_gif')->where('tag', 'qcloud')->first();
-                if ($taskflow && $taskflow['value']) {
+            if ($video->type == ThreadVideo::TYPE_OF_VIDEO && $thread && $thread['is_draft'] == 0) {
+                if ($video->status == ThreadVideo::VIDEO_STATUS_TRANSCODING) {
+                    // 更新文章时，转码
+                    $this->transcodeVideo($video->file_id, 'TranscodeTaskSet');
+                }
+                if (empty($video->cover_url)) {
                     // 转动图
-                    $this->processMediaByProcedure($video->file_id, $taskflow['value']);
+                    $taskflow = Setting::query()->where('key', 'qcloud_vod_taskflow_gif')->where('tag', 'qcloud')->first();
+                    if ($taskflow && $taskflow['value']) {
+                        // 转动图
+                        $this->processMediaByProcedure($video->file_id, $taskflow['value']);
+                    }
                 }
             }
         }
@@ -97,9 +94,17 @@ class VideoBusi extends TomBaseBusi
         });
         if ($video) {
             $video = ThreadVideo::instance()->threadVideoResult($video);
+            if (!$this->isPaySub && !empty($this->priceIds) && in_array($videoId, $this->priceIds)) {
+                $video['mediaUrl'] = '';
+                $video['needPay'] = 1;
+            }elseif(!empty($video['mediaUrl'])){
+                $video['needPay'] = 0;
+            }
+            /*
             if (!$this->canViewTom) {
                 $video['mediaUrl'] = '';
             }
+            */
         } else {
             $video = false;
         }

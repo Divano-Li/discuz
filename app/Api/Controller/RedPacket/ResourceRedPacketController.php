@@ -18,31 +18,28 @@
 
 namespace App\Api\Controller\RedPacket;
 
-use App\Api\Serializer\RedPacketSerializer;
-use App\Repositories\RedPacketRepository;
-use Discuz\Api\Controller\AbstractResourceController;
-use Illuminate\Support\Arr;
-use Psr\Http\Message\ServerRequestInterface;
-use Tobscure\JsonApi\Document;
+use App\Common\ResponseCode;
+use App\Models\RedPacket;
+use App\Repositories\UserRepository;
+use Discuz\Base\DzqController;
 
-class ResourceRedPacketController extends AbstractResourceController
+class ResourceRedPacketController extends DzqController
 {
-    public $serializer = RedPacketSerializer::class;
-
-    public $redPacket;
-
-    public function __construct(RedPacketRepository $redPacket)
+    protected function checkRequestPermissions(UserRepository $userRepo)
     {
-        $this->redPacket = $redPacket;
+        return true;
     }
 
-    /**
-     * {@inheritdoc}
-     */
-    protected function data(ServerRequestInterface $request, Document $document)
+    public function main()
     {
-        $id = Arr::get($request->getQueryParams(), 'id', 0);
+        $id = $this->inPut('id');
+        if (empty($id)) {
+            $this->outPut(ResponseCode::INVALID_PARAMETER);
+        }
 
-        return $this->redPacket->findOrFail($id);
+        $build = RedPacket::query()->findOrFail($id);
+        $data = $this->camelData($build);
+
+        $this->outPut(ResponseCode::SUCCESS, '', $data);
     }
 }

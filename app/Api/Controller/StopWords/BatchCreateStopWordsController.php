@@ -19,13 +19,13 @@
 namespace App\Api\Controller\StopWords;
 
 use App\Commands\StopWord\BatchCreateStopWord;
-use Discuz\Http\DiscuzResponseFactory;
+use App\Common\ResponseCode;
+use App\Repositories\UserRepository;
+use Discuz\Auth\Exception\PermissionDeniedException;
+use Discuz\Base\DzqAdminController;
 use Illuminate\Contracts\Bus\Dispatcher;
-use Psr\Http\Message\ResponseInterface;
-use Psr\Http\Message\ServerRequestInterface;
-use Psr\Http\Server\RequestHandlerInterface;
 
-class BatchCreateStopWordsController implements RequestHandlerInterface
+class BatchCreateStopWordsController extends DzqAdminController
 {
     /**
      * @var Dispatcher
@@ -40,24 +40,35 @@ class BatchCreateStopWordsController implements RequestHandlerInterface
         $this->bus = $bus;
     }
 
-    /**
-     * {@inheritdoc}
-     */
-    public function handle(ServerRequestInterface $request): ResponseInterface
+    protected function checkRequestPermissions(UserRepository $userRepo)
     {
+        if (!$this->user->isAdmin()) {
+            throw new PermissionDeniedException('您没有保存敏感词的权限');
+        }
+        return true;
+    }
+
+    public function main()
+    {
+        $overwrite = $this->inPut('overwrite');
+        $words = $this->inPut('words');
+        $data = [
+            'type' =>'stop-words',
+            'overwrite'=>$overwrite,
+            'words'=>$words
+        ];
+
         $result = $this->bus->dispatch(
-            new BatchCreateStopWord($request->getAttribute('actor'), $request->getParsedBody()->get('data', []))
+            new BatchCreateStopWord($this->user, $data)
         );
 
         $data = [
-            'data' => [
-                'type' => 'stop-words',
-                'created' => $result->get('created', 0),    // 新建数量
-                'updated' => $result->get('updated', 0),    // 修改数量
-                'unique' => $result->get('unique', 0),      // 重复数量
-            ],
+            'type' => 'stop-words',
+            'created' => $result->get('created', 0),    // 新建数量
+            'updated' => $result->get('updated', 0),    // 修改数量
+            'unique' => $result->get('unique', 0),      // 重复数量
         ];
 
-        return DiscuzResponseFactory::JsonResponse($data);
+        $this->outPut(ResponseCode::SUCCESS, '', $data);
     }
 }

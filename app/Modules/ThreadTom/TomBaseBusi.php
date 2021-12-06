@@ -1,6 +1,7 @@
 <?php
+
 /**
- * Copyright (C) 2021 Tencent Cloud.
+ * Copyright (C) 2020 Tencent Cloud.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,6 +20,7 @@ namespace App\Modules\ThreadTom;
 
 use App\Common\ResponseCode;
 use App\Models\Order;
+use App\Models\Thread;
 use App\Models\ThreadTom;
 use App\Models\User;
 use Discuz\Common\Utils;
@@ -34,23 +36,37 @@ use Illuminate\Support\Str;
 abstract class TomBaseBusi
 {
     const RED_LIMIT_TIME = 1;           //红包帖创建时间间隔
+
     const NEED_PAY = false;
 
-
     public $tomId = null;
+
     public $operation = null;
+
     public $body = [];
+
     public $permissions = [];
+
     public $threadId = null;
+
     public $postId = null;
+
     public $user = null;
+
     public $key = null;
+
     public $app = null;
+
     public $db = null;
 
     public $canViewTom = true;
 
     public $plugin = null;
+
+    public $priceIds = [];
+
+    //用户是否购买了部分付费
+    public $isPaySub = false;
 
     public function __construct(User $user, $threadId, $postId, $tomId, $key, $operation, $body, $canViewTom)
     {
@@ -65,6 +81,20 @@ abstract class TomBaseBusi
         $this->canViewTom = $canViewTom;
         $this->db = app('db');
         $this->operationValid();
+        $this->priceIds = !empty($this->getParams('priceIds')) ? $this->getParams('priceIds') : [];
+        $thread = Thread::query()->find($threadId);
+        //判断用户是否有权或者购买了部分付费
+        //1、超管，自己可查看
+        if ($user->isAdmin() || ($thread->user_id == $user->id)) {
+            $this->isPaySub = true;
+        }
+        if (!$this->isPaySub) {
+            //2、具有部分付费订单支付记录
+            $order = Order::query()->where(['thread_id' => $threadId, 'status' => Order::ORDER_STATUS_PAID, 'user_id' => $user->id, 'type' => Order::ORDER_TYPE_ATTACHMENT])->first();
+            if ($order) {
+                $this->isPaySub = true;
+            }
+        }
     }
 
     private function operationValid()
@@ -96,10 +126,19 @@ abstract class TomBaseBusi
         if (!empty($lastStacks)) {
             $pFunc = $lastStacks['function'];
         }
+        //增加 priceList 字段返回
+        $thread_tom = ThreadTom::query()->where('thread_id', $this->threadId)->get()->toArray();
+        $priceList = [];
+        foreach ($thread_tom as $val){
+            if($val['tom_type'] == $this->tomId){
+                $priceList = json_decode($val['price_ids'], 1);
+            }
+        }
         $ret = [
             'tomId' => $this->tomId,
             'operation' => $this->operation,
-            'body' => $array
+            'body' => $array,
+            'priceList' => $priceList
         ];
         $plugin = $this->body['_plugin'] ?? null;
         if ($pFunc == 'select') {
@@ -138,7 +177,9 @@ abstract class TomBaseBusi
 
     public function camelData($arr, $ucfirst = false)
     {
-        if (is_object($arr) && is_callable([$arr, 'toArray'])) $arr = $arr->toArray();
+        if (is_object($arr) && is_callable([$arr, 'toArray'])) {
+            $arr = $arr->toArray();
+        }
         if (!is_array($arr)) {
             //如果非数组原样返回
             return $arr;
@@ -146,7 +187,9 @@ abstract class TomBaseBusi
         $temp = [];
         foreach ($arr as $key => $value) {
             $key1 = Str::camel($key);           // foo_bar  --->  fooBar
-            if ($ucfirst) $key1 = Str::ucfirst($key1);
+            if ($ucfirst) {
+                $key1 = Str::ucfirst($key1);
+            }
             $value1 = self::camelData($value);
             $temp[$key1] = $value1;
         }
@@ -167,5 +210,4 @@ abstract class TomBaseBusi
             ->select(['payment_sn', 'order_sn', 'amount', 'type', 'id', 'status'])
             ->first();
     }
-
 }

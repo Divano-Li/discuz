@@ -294,6 +294,14 @@
  *    @OA\Schema(type="array",@OA\Items(type="integer"))
  *),
  *@OA\Parameter(
+ *    parameter="threadlist_search",
+ *    name="filter[search]",
+ *    in="query",
+ *    required=false,
+ *    description = "搜索关键词(仅支持简单搜索，不支持关键词分词)",
+ *    @OA\Schema(type="string",default="")
+ *),
+ *@OA\Parameter(
  *     parameter="threadlist_sort",
  *    name="filter[sort]",
  *    in="query",
@@ -337,6 +345,16 @@
  *    in="query",
  *    required=false,
  *    description = "分类组合（需要查询的分类id集合）",
+ *    @OA\Schema(
+ *        type="array",@OA\Items(type="integer")
+ *    )
+ *),
+ *@OA\Parameter(
+ *     parameter="threadlist_toUserId",
+ *    name="filter[toUserId]",
+ *    in="query",
+ *    required=false,
+ *    description = "个人主页帖子列表",
  *    @OA\Schema(
  *        type="array",@OA\Items(type="integer")
  *    )
@@ -389,6 +407,7 @@
  *     @OA\Property(property = "paid", type = "boolean", description = "是否已支付"),
  *     @OA\Property(property = "isLike", type = "boolean", description = "当前用户是否点赞"),
  *     @OA\Property(property = "isReward", type = "boolean", description = "当前用户是否打赏"),
+ *     @OA\Property(property = "issueAt", type = "string", description = "帖子首次发布、草稿箱发布、审核通过发布，重新编辑内容发布，四种变更的时间记录"),
  *     @OA\Property(property = "createdAt", type = "string", description = "创建时间"),
  *     @OA\Property(property = "updatedAt", type = "string", description = "更新时间"),
  *     @OA\Property(property = "diffTime", type = "string",default="5秒前", description = "显示统一规则下的时间差"),
@@ -432,9 +451,9 @@
  *     ),
  *     @OA\Property(property = "position", type = "object", description = "位置信息",
  *        @OA\Property(property = "address", type = "string", description = "街道详细地址"),
- *        @OA\Property(property = "latitude", type = "boolean", description = "纬度"),
- *        @OA\Property(property = "location", type = "boolean", description = "地址"),
- *        @OA\Property(property = "longitude", type = "boolean", description = "经度"),
+ *        @OA\Property(property = "location", type = "string", description = "地址"),
+ *        @OA\Property(property = "latitude", type = "string", description = "纬度"),
+ *        @OA\Property(property = "longitude", type = "string", description = "经度"),
  *      ),
  *     @OA\Property(property = "ability", type = "object", description = "当前用户对该贴的操作权限",
  *        @OA\Property(property = "canBeReward", type = "boolean", description = "是否可打赏"),
@@ -445,6 +464,14 @@
  *        @OA\Property(property = "canReply", type = "boolean", description = "是否可回复"),
  *        @OA\Property(property = "canStick", type = "boolean", description = "是否可设置置顶"),
  *        @OA\Property(property = "canViewPost", type = "boolean", description = "是否可查看详情"),
+ *     ),
+ *     @OA\Property(property = "orderInfo", type = "object", description = "订单信息",
+ *          @OA\Property(property = "amount", type = "string", description = "金额"),
+ *          @OA\Property(property = "isAnonymous", type = "boolean", description = "是否匿名"),
+ *          @OA\Property(property = "redAmount", type = "string", description = "红包金额"),
+ *          @OA\Property(property = "rewardAmount", type = "string", description = "悬赏金额"),
+ *          @OA\Property(property = "title", type = "string", description = "标题"),
+ *          @OA\Property(property = "type", type = "integer", description = "类型")
  *     ),
  *     @OA\Property(property = "content", type = "object", description = "帖子正文内容",allOf={
  *         @OA\Schema(@OA\Property(property = "text", type = "string", description = "帖子正文内容")),
@@ -551,7 +578,7 @@
  *     schema = "user_detail_output",
  *     title = "用户详情输出数据集合",
  *          @OA\Property(property = "id", type = "integer", description = "用户id"),
- *          @OA\Property(property = "username", type = "string", description = "用户名"),
+ *          @OA\Property(property = "username", type = "string", description = "用户名(已去除)"),
  *          @OA\Property(property = "nickname", type = "string", description = "昵称"),
  *          @OA\Property(property = "mobile", type = "string", description = "昵称"),
  *          @OA\Property(property = "avatar", type = "string", description = "头像地址"),
@@ -600,10 +627,12 @@
  *           @OA\Property(property = "title", type = "string", description = "消息通知标题"),
  *           @OA\Property(property = "content", type = "string", description = "消息通知内容"),
  *           @OA\Property(property = "raw", type = "object", description = "消息模板", allOf = {
- *              @OA\Schema(@OA\Property(property = "tplId", type = "integer", description = "消息模板id"))
+ *              @OA\Schema(
+ *                  @OA\Property(property = "tplId", type = "integer", description = "消息模板id"),
+ *                  @OA\Property(property = "refeeType", type = "integer", description = "续费通知类型；1：普通用户组续费类型、2：付费用户组续费类型")
+ *              )
  *           }),
  *           @OA\Property(property = "userId", type = "integer", description = "发送人-用户id"),
- *           @OA\Property(property = "username", type = "string", description = "发送人-用户名"),
  *           @OA\Property(property = "userAvatar", type = "string", description = "发送人-用户头像"),
  *           @OA\Property(property = "nickname", type = "string", description = "发送人-昵称"),
  *           @OA\Property(property = "isReal", type = "boolean", description = "是否实名"),
@@ -611,7 +640,6 @@
  *           @OA\Property(property = "createdAt", type = "string", description = "发送时间"),
  *           @OA\Property(property = "threadId", type = "integer", description = "帖子id"),
  *           @OA\Property(property = "threadTitle", type = "string", description = "帖子标题"),
- *           @OA\Property(property = "threadUsername", type = "string", description = "帖子作者用户名"),
  *           @OA\Property(property = "threadUserGroups", type = "string", description = "帖子作者所在用户组"),
  *           @OA\Property(property = "threadIsApproved", type = "integer", description = "帖子是否已审核"),
  *           @OA\Property(property = "threadUserNickname", type = "string", description = "帖子作者昵称"),
@@ -664,7 +692,7 @@
  *         @OA\Property(property = "isMissNickname", type = "integer", description = "是否缺少昵称"),
  *         @OA\Property(property = "avatarUrl", type = "string", description = "头像url"),
  *         @OA\Property(property = "userStatus", type = "integer", description = "用户状态"),
- *         @OA\Property(property = "uid", type = "integer", description = "用户id"),
+ *         @OA\Property(property = "userId", type = "integer", description = "用户id"),
  *     ))
  * )
  *

@@ -1,6 +1,7 @@
 <?php
+
 /**
- * Copyright (C) 2021 Tencent Cloud.
+ * Copyright (C) 2020 Tencent Cloud.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,16 +20,25 @@ namespace App\Modules\ThreadTom;
 
 class TomConfig
 {
-
     const TOM_TEXT = 100;//文字内容，目前不单独作为扩展插件存储
+
     const TOM_IMAGE = 101;
+
     const TOM_AUDIO = 102;
+
     const TOM_VIDEO = 103;
+
     const TOM_GOODS = 104;
+
     const TOM_REDPACK = 106;
+
     const TOM_REWARD = 107;
+
     const TOM_DOC = 108;
+
     const TOM_VOTE = 109;
+
+    const OPTIMIZE_TYPE_LIST = [TomConfig::TOM_GOODS,TomConfig::TOM_REDPACK,TomConfig::TOM_REWARD,'61540fef8f4de8'];
 
     public static $map = [
         self::TOM_TEXT => [
@@ -43,7 +53,7 @@ class TomConfig
         ],
         self::TOM_AUDIO => [
             'name_en' => 'Audio',
-            'name_cn' => '语音',
+            'name_cn' => '语音条',
             'service' => \App\Modules\ThreadTom\Busi\AudioBusi::class
         ],
         self::TOM_VIDEO => [
@@ -68,7 +78,7 @@ class TomConfig
         ],
         self::TOM_DOC => [
             'name_en' => 'Attachment',
-            'name_cn' => '文件附件',
+            'name_cn' => '附件',
             'service' => \App\Modules\ThreadTom\Busi\DocBusi::class
         ],
         self::TOM_VOTE => [
@@ -77,4 +87,6 @@ class TomConfig
             'service' => \App\Modules\ThreadTom\Busi\VoteBusi::class
         ]
     ];
+
+
 }

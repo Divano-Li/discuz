@@ -196,22 +196,41 @@ trait NotifyTrait
                 // 悬赏支出
                 case Order::ORDER_TYPE_QUESTION_REWARD:
                     $this->orderInfo->save();
-                    Thread::query()->where('id', $this->orderInfo->thread_id)->update(['is_draft' => 0]);
+                    Thread::query()->where('id', $this->orderInfo->thread_id)->update(['is_draft' => Thread::BOOL_NO]);
                     return $this->orderInfo;
 
                 // 合并订单支出
                 case Order::ORDER_TYPE_MERGE:
                     $this->orderInfo->save();
-                    Thread::query()->where('id', $this->orderInfo->thread_id)->update(['is_draft' => 0]);
+                    Thread::query()->where('id', $this->orderInfo->thread_id)->update(['is_draft' => Thread::BOOL_NO]);
                     $orderChildrenInfo = OrderChildren::query()->where('status', Order::ORDER_STATUS_PENDING)->where('order_sn', $this->orderInfo->order_sn)->get();
                     $orderData = $this->orderInfo;
-                     $orderChildrenInfo->map(function ($orderChildren) use($orderData) {
-                        $orderChildren->status = Order::ORDER_STATUS_PAID;
-                        $orderChildren->thread_id = $orderData->thread_id ?? 0;
-                        $orderChildren->save();
+                     $orderChildrenInfo->map(function ($orderChildren) use ($orderData) {
+                         $orderChildren->status = Order::ORDER_STATUS_PAID;
+                         $orderChildren->thread_id = $orderData->thread_id ?? 0;
+                         $orderChildren->save();
                      });
                     return $this->orderInfo;
 
+                // 充值
+                case Order::ORDER_TYPE_CHARGE:
+                    // 钱包明细记录类型
+                    $payeeOrderDetail = $this->orderByDetailType();
+                    //充值人钱包明细记录
+                    UserWalletLog::createWalletLog(
+                        $this->orderInfo->user->id,
+                        $this->orderInfo->amount,              // 变动可用金额
+                        0,                           // 变动冻结金额
+                        $payeeOrderDetail['change_type'],       // 180 自动充值
+                        trans($payeeOrderDetail['change_type_lang']),
+                        null,                   // 关联提现ID
+                        $this->orderInfo->id    // 订单ID
+                    );
+                    // 增加用户余额
+                    $this->orderInfo->user->userWallet->available_amount += $this->orderInfo->amount;
+                    $this->orderInfo->user->userWallet->save();
+                    return $this->orderInfo;
+                    break;
                 default:
                     break;
             }
@@ -268,6 +287,10 @@ trait NotifyTrait
                     $change_type = UserWalletLog::TYPE_INCOME_ATTACHMENT;
                     $change_type_lang = 'wallet.income_attachment';
                 }
+                break;
+            case Order::ORDER_TYPE_CHARGE:  //充值
+                $change_type = UserWalletLog::TYPE_CHARGE;
+                $change_type_lang = 'wallet.charge_money';
                 break;
             default:
                 $change_type = $this->orderInfo->type;

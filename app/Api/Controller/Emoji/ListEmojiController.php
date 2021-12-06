@@ -18,24 +18,22 @@
 
 namespace App\Api\Controller\Emoji;
 
-use App\Api\Serializer\EmojiSerializer;
+use App\Common\ResponseCode;
 use App\Models\Emoji;
-use Discuz\Api\Controller\AbstractListController;
-use Psr\Http\Message\ServerRequestInterface;
-use Tobscure\JsonApi\Document;
+use App\Repositories\UserRepository;
+use Discuz\Base\DzqController;
 
-class ListEmojiController extends AbstractListController
+class ListEmojiController extends DzqController
 {
-    /**
-     * {@inheritdoc}
-     */
-    public $serializer = EmojiSerializer::class;
-
-    /**
-     * {@inheritdoc}
-     */
-    protected function data(ServerRequestInterface $request, Document $document)
+    protected function checkRequestPermissions(UserRepository $userRepo)
     {
-        return Emoji::all();
+        return true;
+    }
+
+    public function main()
+    {
+        $emojis = Emoji::getEmojiListForController($this->request);
+        $result = $this->camelData($emojis);
+        $this->outPut(ResponseCode::SUCCESS, '', $result);
     }
 }

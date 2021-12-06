@@ -20,15 +20,14 @@ namespace App\Api\Controller\Statistic;
 
 use App\Api\Serializer\FirstStatisticsSerializer;
 use App\Commands\Statistic\FirstStatistics;
+use App\Common\ResponseCode;
 use App\Models\Finance;
 use Carbon\Carbon;
-use Discuz\Api\Controller\AbstractResourceController;
+use Discuz\Base\DzqAdminController;
 use Illuminate\Contracts\Bus\Dispatcher;
 use Illuminate\Support\Arr;
-use Psr\Http\Message\ServerRequestInterface;
-use Tobscure\JsonApi\Document;
 
-class FirstChartController extends AbstractResourceController
+class FirstChartController extends DzqAdminController
 {
     public $serializer = FirstStatisticsSerializer::class;
 
@@ -50,13 +49,18 @@ class FirstChartController extends AbstractResourceController
     /**
      * {@inheritdoc}
      */
-    public function data(ServerRequestInterface $request, Document $document)
+    public function main()
     {
-        $actor = $request->getAttribute('actor');
-        $filter = $this->extractFilter($request);
-        $type = (int) Arr::get($filter, 'type', Finance::TYPE_DAYS);
+        $actor = $this->user;
+        $filter = $this->inPut('filter');
+        $type   = $this->inPut('type', Finance::TYPE_DAYS);
         $createdAtBegin = Arr::get($filter, 'createdAtBegin', Carbon::parse(self::CREATE_AT_BEGIN)->toDateString());
         $createdAtEnd = Arr::get($filter, 'createdAtEnd', Carbon::now()->toDateString());
-        return $this->bus->dispatch(new FirstStatistics($actor,$type, $createdAtBegin, $createdAtEnd));
+
+        $result = $this->bus->dispatch(
+            new FirstStatistics($actor, $type, $createdAtBegin, $createdAtEnd)
+        );
+
+        $this->outPut(ResponseCode::SUCCESS, '', $result);
     }
 }

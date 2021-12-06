@@ -79,12 +79,11 @@ class ListPostsController extends DzqController
         $sort = $this->inPut('sort');
 
         $posts = $this->search($filters, $perPage, $page, $sort);
-        $count = $this->searchCount($filters);
         $posts['pageData'] = $posts['pageData']->map(function ($post) {
             return $this->getPost($post, true);
         })->sortByDesc('rewards')->values()->toArray();
         $posts['pageData'] = $this->getLastThreeComments($posts['pageData']);
-        $posts['totalCount'] = $count;
+
         $this->outPut(ResponseCode::SUCCESS, '', $posts);
     }
 
@@ -104,57 +103,6 @@ class ListPostsController extends DzqController
         $this->applyFilters($query, $filters, $sort);
 
         return $this->pagination($page, $perPage, $query, false);
-    }
-
-    protected function searchCount(array $filters)
-    {
-        Post::setStateUser($this->user);
-        $query = Post::query()
-            ->with([
-                'thread:id,type,category_id',
-                'user:id,username,nickname,avatar,realname',
-                'user.groups:id,name,is_display',
-                'images',
-                'likeState',
-            ])
-            ->select('posts.*');
-
-        $this->applyFiltersWithCount($query, $filters);
-
-        return $query->count();
-    }
-
-    protected function applyFiltersWithCount(Builder $query, array $filters)
-    {
-
-        $query->where('posts.is_first', false)
-            ->whereNull('posts.deleted_at');
-
-        // 主题
-        $threadId = Arr::get($filters, 'thread');
-        if ($threadId) {
-            $query->where('posts.thread_id', $threadId);
-        }
-
-        $user = $this->user;
-        //如果是审核状态只能自己看到
-        if (!$user->isAdmin()) {
-            //如果是游客
-            if ($user->isGuest()){
-                $query->where('posts.is_approved', Post::APPROVED_YES);
-            } else {
-                $notUser = Post::query()
-                    ->where('user_id','<>',$user->id)
-                    ->where('is_approved','<>', Post::APPROVED_YES)
-                    ->where(['is_first' => false , 'thread_id' => $threadId])
-                    ->get(['id'])
-                    ->pluck('id')
-                    ->toArray();
-                if ($notUser) $query->whereNotIn('posts.id',$notUser);
-            }
-        }
-
-        return $query;
     }
 
     protected function applyFilters(Builder $query, array $filters, $sort)

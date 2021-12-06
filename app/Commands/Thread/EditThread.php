@@ -18,12 +18,12 @@
 
 namespace App\Commands\Thread;
 
+use App\Api\Controller\Threads\ThreadStickTrait;
 use App\Censor\Censor;
-use App\Events\Post\Saved;
 use App\Events\Thread\Deleting;
+use App\Models\ThreadStickSort;
 use App\Repositories\SequenceRepository;
 use App\Events\Thread\Saving;
-use App\Events\Thread\ThreadWasApproved;
 use App\Events\Thread\Updated;
 use App\Models\Thread;
 use App\Models\ThreadVideo;
@@ -46,8 +46,12 @@ use Illuminate\Validation\ValidationException;
 class EditThread
 {
     use AssertPermissionTrait;
+
     use EventsDispatchTrait;
+
     use ThreadNoticesTrait;
+
+    use ThreadStickTrait;
 
     /**
      * The ID of the thread to edit.
@@ -100,12 +104,12 @@ class EditThread
 
         $attributes = Arr::get($this->data, 'attributes', []);
 
-        $thread = Thread::query()->where('id',$this->threadId)->first();
-        $action_desc = '';
+        $thread = Thread::query()->where('id', $this->threadId)->first();
+        $actionDesc = '';
 
-        if($thread->title == '' || empty($thread->title)) {
+        if ($thread->title == '' || empty($thread->title)) {
             $threadTitle = '，其ID为'. $thread->id;
-        }else{
+        } else {
             $threadTitle = '【'. $thread->title .'】';
         }
 
@@ -114,7 +118,10 @@ class EditThread
                 $thread->is_sticky = $attributes['isSticky'];
                 $thread->updated_at = Carbon::now();
                 if ($thread->is_sticky) {
+                    $this->updateOrCreateThreadStick($thread->id);
                     $this->threadNotices($thread, $this->actor, 'isSticky', $attributes['message'] ?? '');
+                } else {
+                    ThreadStickSort::deleteThreadStick($thread->id);
                 }
             }
         }
@@ -132,10 +139,10 @@ class EditThread
         if (isset($attributes['isDeleted'])) {
             if ($attributes['isDeleted']) {
                 $thread->hide($this->actor, ['message' => $attributes['message'] ?? '']);
-                $action_desc = '删除用户主题帖'. $threadTitle;
+                $actionDesc = '删除用户主题帖'. $threadTitle;
             } else {
                 $thread->restore($this->actor, ['message' => $attributes['message'] ?? '']);
-                $action_desc = '还原用户主题帖'. $threadTitle;
+                $actionDesc = '还原用户主题帖'. $threadTitle;
             }
         }
 
@@ -156,7 +163,7 @@ class EditThread
                 }
                 if ($threadVideoStatus->status == Thread::THREAD_VIDEO_STATUS_TRANSCODING) {
                     throw new Exception(trans('post.audio_video_is_being_transcoded'));
-                } else if ($threadVideoStatus->status == Thread::THREAD_VIDEO_STATUS_FAIL){
+                } elseif ($threadVideoStatus->status == Thread::THREAD_VIDEO_STATUS_FAIL) {
                     throw new Exception(trans('post.audio_video_transcoding_failed'));
                 }
 
@@ -180,17 +187,18 @@ class EditThread
         $thread->raise(new Updated($thread, $this->actor, $this->data));
 
         $thread->save();
-        if (isset($attributes['isDeleted'])){
+        if (isset($attributes['isDeleted'])) {
             $this->events->dispatch(new Deleting($thread, $this->actor, $this->data));
         }
-        if(!isset($attributes['isFavorite']) && !isset($attributes['isSticky']) && !isset($attributes['isEssence'])){
+        if (!isset($attributes['isFavorite']) && !isset($attributes['isSticky']) && !isset($attributes['isEssence'])) {
             app(SequenceRepository::class)->updateSequenceCache($this->threadId, 'edit');
         }
 
-        if($action_desc !== '' && !empty($action_desc)){
+        if ($actionDesc !== '' && !empty($actionDesc)) {
             AdminActionLog::createAdminActionLog(
                 $this->actor->id,
-                $action_desc
+                AdminActionLog::ACTION_OF_THREAD,
+                $actionDesc
             );
         }
 

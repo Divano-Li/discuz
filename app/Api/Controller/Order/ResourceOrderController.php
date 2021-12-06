@@ -18,50 +18,44 @@
 
 namespace App\Api\Controller\Order;
 
-use Discuz\Api\Controller\AbstractResourceController;
-use Psr\Http\Message\ServerRequestInterface;
-use Tobscure\JsonApi\Document;
-use Illuminate\Support\Arr;
-use Discuz\Auth\AssertPermissionTrait;
-use App\Repositories\OrderRepository;
-use App\Api\Serializer\OrderSerializer;
+use App\Common\ResponseCode;
+use App\Repositories\UserRepository;
+use App\Models\Order;
+use Discuz\Base\DzqController;
 
-class ResourceOrderController extends AbstractResourceController
+class ResourceOrderController extends DzqController
 {
-    use AssertPermissionTrait;
-
-    /**
-     * {@inheritdoc}
-     */
-    public $serializer = OrderSerializer::class;
-
-    /**
-     * {@inheritdoc}
-     */
-    public $order;
-
-    /**
-     * {@inheritdoc}
-     */
-    public $include = [
-        'user',
-        'thread',
-        'thread.firstPost'
-    ];
-
-    public function __construct(OrderRepository $order)
+    protected function checkRequestPermissions(UserRepository $userRepo)
     {
-        $this->order = $order;
+        if ($this->user->isGuest()) {
+            $this->outPut(ResponseCode::JUMP_TO_LOGIN);
+        }
+        return true;
     }
 
-    /**
-     * {@inheritdoc}
-     */
-    protected function data(ServerRequestInterface $request, Document $document)
+    public function main()
     {
-        $actor = $request->getAttribute('actor');
-        $this->assertRegistered($actor);
-        $order_sn = Arr::get($request->getQueryParams(), 'order_sn');
-        return $this->order->findOrderOrFail($order_sn, $actor);
+        $user = $this->user;
+        $order = Order::query()
+            ->where([
+                        'user_id' => $user->id,
+                        'order_sn' => $this->inPut('orderSn'),
+                    ])
+            ->first();
+        if (empty($order)) {
+            $this->outPut(ResponseCode::INVALID_PARAMETER);
+        }
+        $order = [
+            'id' => $order->id,
+            'orderSn' => (string) $order->order_sn,
+            'amount' => $order->amount,
+            'status' => $order->status,
+            'type' => $order->type,
+            'threadId' => $order->thread_id,
+            'groupId' => $order->group_id,
+            'updatedAt' => optional($order->updated_at)->format('Y-m-d H:i:s'),
+            'createdAt' => optional($order->created_at)->format('Y-m-d H:i:s'),
+        ];
+        $this->outPut(ResponseCode::SUCCESS, '', $order);
     }
 }

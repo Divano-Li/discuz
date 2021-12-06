@@ -26,12 +26,13 @@ use App\Events\Users\PayPasswordChanged;
 use App\Exceptions\TranslatorException;
 use App\Models\Group;
 use App\Models\GroupPaidUser;
+use App\Models\GroupUser;
+use App\Models\GroupUserMq;
 use App\Models\Order;
 use App\Models\User;
 use App\Common\ResponseCode;
 use App\Models\UserActionLogs;
 use App\Models\AdminActionLog;
-use App\Models\UserSignInFields;
 use App\Notifications\Messages\Database\GroupMessage;
 use App\Notifications\System;
 use App\Repositories\UserRepository;
@@ -54,6 +55,7 @@ use Illuminate\Validation\ValidationException;
 class UpdateAdminUser
 {
     use AssertPermissionTrait;
+
     use EventsDispatchTrait;
 
     /**
@@ -144,9 +146,9 @@ class UpdateAdminUser
 
         $canEdit = true;
         $isSelf = $this->actor->id === $user->id;
-        if(!empty(Arr::get($this->data, 'data.attributes'))){
+        if (!empty(Arr::get($this->data, 'data.attributes'))) {
             $attributes = Arr::get($this->data, 'data.attributes');
-        }else{
+        } else {
             $attributes = $this->data;
         }
         // 下列部分方法使用地址引用的方式修改了该值，以便验证用户参数
@@ -206,7 +208,7 @@ class UpdateAdminUser
             return $validate;
         }
 
-        $old_username = $user->username;
+        $oldUsername = $user->username;
 
         // 敏感词校验
         $this->censor->checkText($username, 'username');
@@ -225,7 +227,8 @@ class UpdateAdminUser
         if (! $isSelf) {
             AdminActionLog::createAdminActionLog(
                 $this->actor->id,
-                '更改了用户【'. $old_username .'】为【'. $username .'】'
+                AdminActionLog::ACTION_OF_USER,
+                '更改了用户名【'. $oldUsername .'】为【'. $username .'】'
             );
         }
 
@@ -256,7 +259,8 @@ class UpdateAdminUser
         if (! $isSelf) {
             AdminActionLog::createAdminActionLog(
                 $this->actor->id,
-                '更改了用户【'. $user->username .'】的密码'
+                AdminActionLog::ACTION_OF_USER,
+                '更改了用户【'. $user->username .'】的登录密码.'
             );
         }
 
@@ -359,27 +363,29 @@ class UpdateAdminUser
 
         // 审核后系统通知事件
         $this->events->dispatch(new ChangeUserStatus($user, $logMsg));
-        $this->setRefuseMessage($user,$logMsg);
+        $this->setRefuseMessage($user, $logMsg);
 
         // 记录用户状态操作日志
         UserActionLogs::writeLog($this->actor, $user, User::enumStatus($status), $logMsg);
 
-        $status_desc = array(
+        $status_desc = [
             '0' => '正常',
             '1' => '禁用',
             '2' => '审核中',
             '3' => '审核拒绝',
             '4' => '审核忽略'
-        );
+        ];
         AdminActionLog::createAdminActionLog(
             $this->actor->id,
+            AdminActionLog::ACTION_OF_USER,
             '更改了用户【'. $user->username .'】的用户状态为【'. $status_desc[$status] .'】'
         );
     }
 
     //记录拒绝原因
-    private function setRefuseMessage(User &$user,$refuseMessage){
-        if ($user->status == User::STATUS_REFUSE) {
+    private function setRefuseMessage(User &$user, $refuseMessage)
+    {
+        if ($user->status == User::STATUS_REFUSE || $user->status == User::STATUS_BAN) {
             $user->reject_reason = $refuseMessage;
             $user->save();
         }
@@ -411,32 +417,46 @@ class UpdateAdminUser
 
         // 当新旧用户组不一致时，更新用户组并发送通知
         if ($newGroups && $newGroups->toArray() != $oldGroups->keys()->toArray()) {
-            // 更新用户组
-            $user->groups()->sync($newGroups);
+            $payGroups = Group::query()->where('is_paid', Group::IS_PAID)->get();
+            $payGroupMap = [];
+            $payGroups->map(function ($item) use (&$payGroupMap) {
+                $payGroupMap[$item->id] = $item;
+            });
+            $payGroupIds = $payGroups->pluck('id')->toArray();
+            $newPayGroupIds = array_intersect($newGroups->toArray(), $payGroupIds);
+            $isNewPay = false;
+            if (!empty($newPayGroupIds)) {
+                $isNewPay = true;
+            }
+            $oldPayGroupIds = array_intersect($oldGroups->keys()->toArray(), $payGroupIds);
+            $isOldPay = false;
+            if (!empty($oldPayGroupIds)) {
+                $isOldPay = true;
+            }
 
             AdminActionLog::createAdminActionLog(
                 $this->actor->id,
+                AdminActionLog::ACTION_OF_USER,
                 '更改了用户【'. $user->username .'】的用户角色为【'. $groupName['name'] .'】'
             );
 
             $deleteGroups = array_diff($oldGroups->keys()->toArray(), $newGroups->toArray());
             if ($deleteGroups) {
-                //删除付费用户组
-                $groupsPaid = Group::query()->whereIn('id', $deleteGroups)->where('is_paid', Group::IS_PAID)->pluck('id')->toArray();
-                if (!empty($groupsPaid)) {
-                    GroupPaidUser::query()->whereIn('group_id', $groupsPaid)
-                        ->where('user_id', $user->id)
-                        ->update(['operator_id' => $this->actor->id, 'deleted_at' => Carbon::now(), 'delete_type' => GroupPaidUser::DELETE_TYPE_ADMIN]);
+                if ($isOldPay) {
+                    //删除付费用户组
+                    $deleteGroups = $payGroupIds;
+                    $this->deletePayGroups($user, $deleteGroups);
                 }
             }
-            $newPaidGroups = $user->groups()->where('is_paid', Group::IS_PAID)->get();
-            if ($newPaidGroups->count()) {
-                //新增付费用户组处理
-                foreach ($newPaidGroups as $paidGroupVal) {
-                    $this->events->dispatch(
-                        new PaidGroup($paidGroupVal->id, $user, null, $this->actor)
-                    );
-                }
+
+            // 更新用户组
+            $user->groups()->sync($newGroups);
+
+            //付费用户组处理
+            foreach ($newPayGroupIds as $paidGroupId) {
+                $this->events->dispatch(
+                    new PaidGroup($paidGroupId, $user, null, $this->actor)
+                );
             }
 
             // 发送系统通知
@@ -448,6 +468,40 @@ class UpdateAdminUser
             // Tag 发送通知
             $user->notify(new System(GroupMessage::class, $user, $notifyData));
         }
+    }
+
+    protected function deletePayGroups(User $user, array $deleteGroupsIds)
+    {
+        if (empty($user) || empty($deleteGroupsIds)) {
+            return;
+        }
+
+        $changeGroupUser = GroupUser::query()->whereIn('group_id', $deleteGroupsIds)->where('user_id', $user->id)->first();
+        $dtSeconds = 0;
+        if (!empty($changeGroupUser)) {
+            $expired_at = $changeGroupUser->expiration_time;
+            if (!empty($expired_at)) {
+                if ($expired_at>Carbon::now()) {
+                    $dtSeconds = Carbon::now()->diffInSeconds(Carbon::parse($expired_at));
+                }
+            }
+        }
+
+        $remainDays = GroupUserMq::query()->whereIn('group_id', $deleteGroupsIds)
+            ->where('user_id', $user->id)->sum('remain_days');
+        if ($remainDays != 0 || $dtSeconds != 0) {
+            if (!empty($user->expired_at)) {
+                $user->expired_at = Carbon::parse($user->expired_at)->subDays($remainDays)->subSeconds($dtSeconds);
+                $user->save();
+            }
+        }
+
+        GroupUserMq::query()->whereIn('group_id', $deleteGroupsIds)
+            ->where('user_id', $user->id)->delete();
+        GroupPaidUser::query()->whereIn('group_id', $deleteGroupsIds)
+            ->where('user_id', $user->id)
+            ->where('delete_type', 0)
+            ->update(['operator_id' => $this->actor->id, 'deleted_at' => Carbon::now(), 'delete_type' => GroupPaidUser::DELETE_TYPE_ADMIN]);
     }
 
     /**
@@ -470,11 +524,10 @@ class UpdateAdminUser
             ->where('status', Order::ORDER_STATUS_PAID)
             ->orderBy('id', 'desc')
             ->first();
-        if(!empty($order)){
+        if (!empty($order)) {
             $order->expired_at = Carbon::parse($expiredAt);
             $order->save();
         }
-
     }
 
     /**
@@ -532,7 +585,6 @@ class UpdateAdminUser
         return $validate;
     }
 
-
     protected function changeNickname(User $user, bool $canEdit, bool $isSelf, array $attributes, array &$validate)
     {
         $nickname = Arr::get($attributes, 'nickname');
@@ -543,8 +595,17 @@ class UpdateAdminUser
 
         // 过滤内容
         $nickname = $this->specialChar->purify($nickname);
+        $oldNickname = $user->nickname;
         $user->changeNickname($nickname);
         $validate['nickname'] = $nickname;
+
+        if (! $isSelf) {
+            AdminActionLog::createAdminActionLog(
+                $this->actor->id,
+                AdminActionLog::ACTION_OF_USER,
+                '更改了用户昵称【'. $oldNickname .'】为【'. $nickname .'】'
+            );
+        }
 
         return $validate;
     }

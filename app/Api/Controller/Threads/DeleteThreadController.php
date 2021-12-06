@@ -1,7 +1,6 @@
 <?php
-
 /**
- * Copyright (C) 2020 Tencent Cloud.
+ * Copyright (C) 2021 Tencent Cloud.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,37 +17,65 @@
 
 namespace App\Api\Controller\Threads;
 
-use App\Commands\Thread\DeleteThread;
-use Discuz\Api\Controller\AbstractDeleteController;
-use Illuminate\Contracts\Bus\Dispatcher;
-use Illuminate\Support\Arr;
-use Psr\Http\Message\ServerRequestInterface;
 
-class DeleteThreadController extends AbstractDeleteController
+use App\Common\CacheKey;
+use App\Common\ResponseCode;
+use App\Models\Category;
+use App\Models\Thread;
+use App\Models\ThreadStickSort;
+use App\Modules\ThreadTom\TomTrait;
+use App\Repositories\UserRepository;
+use App\Traits\ThreadNoticesTrait;
+use Carbon\Carbon;
+use Discuz\Base\DzqCache;
+use Discuz\Base\DzqController;
+
+class DeleteThreadController extends DzqController
 {
-    /**
-     * @var Dispatcher
-     */
-    protected $bus;
+    use TomTrait;
+    use ThreadNoticesTrait;
 
-    /**
-     * @param Dispatcher $bus
-     */
-    public function __construct(Dispatcher $bus)
+    private $thread;
+
+    protected function checkRequestPermissions(UserRepository $userRepo)
     {
-        $this->bus = $bus;
+        $this->thread = Thread::query()
+            ->where(['id' => $this->inPut('threadId')])
+            ->whereNull('deleted_at')
+            ->first();
+        if (empty($this->thread)) {
+            $this->outPut(ResponseCode::RESOURCE_NOT_FOUND);
+        }
+        return $userRepo->canHideThread($this->user, $this->thread);
     }
 
-    /**
-     * {@inheritdoc}
-     */
-    protected function delete(ServerRequestInterface $request)
+    public function main()
     {
-        $id = Arr::get($request->getQueryParams(), 'id');
-        $actor = $request->getAttribute('actor');
+        $thread = $this->thread;
+        $thread->deleted_at = Carbon::now();
+        $thread->deleted_user_id = $this->user->id;
+        if (!$thread->save()) {
+            $this->outPut(ResponseCode::DB_ERROR, '删除失败');
+        }
 
-        $this->bus->dispatch(
-            new DeleteThread($id, $actor)
-        );
+        ThreadStickSort::deleteThreadStick($thread->id);
+
+        Category::refreshThreadCountV3($thread['category_id']);
+
+        if ($thread->user_id != $this->user->id) {
+            $this->threadNotices($thread, $this->user, 'isDeleted', $this->inPut('message'));
+        }
+
+        $this->outPut(ResponseCode::SUCCESS);
+    }
+
+    public function prefixClearCache($user)
+    {
+        CacheKey::delListCache();
+        $threadId = $this->inPut('threadId');
+        DzqCache::delHashKey(CacheKey::LIST_THREADS_V3_THREADS, $threadId);
+        DzqCache::delHashKey(CacheKey::LIST_THREADS_V3_POSTS, $threadId);
+        DzqCache::delHashKey(CacheKey::LIST_THREADS_V3_TAGS, $threadId);
+        DzqCache::delHashKey(CacheKey::LIST_THREADS_V3_TOMS, $threadId);
     }
 }

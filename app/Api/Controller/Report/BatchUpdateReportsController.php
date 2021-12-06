@@ -18,65 +18,39 @@
 
 namespace App\Api\Controller\Report;
 
-use App\Api\Serializer\ReportsSerializer;
-use App\Commands\Report\BatchEditReport;
-use Discuz\Api\Controller\AbstractListController;
-use Discuz\Auth\AssertPermissionTrait;
-use Illuminate\Contracts\Bus\Dispatcher;
-use Psr\Http\Message\ServerRequestInterface;
-use Tobscure\JsonApi\Document;
+use App\Models\Report;
+use App\Common\ResponseCode;
+use Discuz\Base\DzqAdminController;
 
-class BatchUpdateReportsController extends AbstractListController
+class BatchUpdateReportsController extends DzqAdminController
 {
-    use AssertPermissionTrait;
-
-    /**
-     * {@inheritdoc}
-     */
-    public $serializer = ReportsSerializer::class;
-
-    /**
-     * @var Dispatcher
-     */
-    protected $bus;
-
-    /**
-     * @param Dispatcher $bus
-     */
-    public function __construct(Dispatcher $bus)
+    public function main()
     {
-        $this->bus = $bus;
-    }
+        $data = $this->inPut('data');
+        if (empty($data)) {
+            $this->outPut(ResponseCode::INVALID_PARAMETER, '缺少必要参数', '');
+        }
 
-    /**
-     * {@inheritdoc}
-     *
-     * @param ServerRequestInterface $request
-     * @param Document $document
-     * @return array|mixed
-     * @throws \Discuz\Auth\Exception\PermissionDeniedException
-     */
-    protected function data(ServerRequestInterface $request, Document $document)
-    {
-        $actor = $request->getAttribute('actor');
-        $this->assertPermission($actor->isAdmin());
+        if (count($data) > 100) {
+            $this->outPut(ResponseCode::INTERNAL_ERROR, '批量添加超过限制', '');
+        }
 
-        $data = $request->getParsedBody()->get('data', []);
-
-        $result = ['data' => [], 'meta' => []];
-
-        collect($data)->each(function ($item) use ($actor) {
+        foreach ($data as $key => $value) {
             try {
-                $result['data'][] = $this->bus->dispatch(
-                    new BatchEditReport($actor, $item)
-                );
+                $this->dzqValidate($value, [
+                    'id'       => 'required|int|min:1',
+                    'status'   => 'required|int|in:1'
+                ]);
+
+                $report = Report::query()->findOrFail($value['id']);
+                $report->status = $value['status'];
+                $report->save();
             } catch (\Exception $e) {
-                $result['meta'][] = ['id' => $item, 'message' => $e->getMessage()];
+                app('log')->info('requestId：' . $this->requestId . '-' . '修改举报反馈出错，举报ID为： "' . $value['id'] . '" 。错误信息： ' . $e->getMessage());
+                $this->outPut(ResponseCode::INTERNAL_ERROR, '修改出错', [$e->getMessage(), $value]);
             }
-        });
+        }
 
-        $document->setMeta($result['meta']);
-
-        return $result['data'];
+        $this->outPut(ResponseCode::SUCCESS, '', '');
     }
 }

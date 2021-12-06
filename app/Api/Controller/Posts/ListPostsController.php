@@ -18,457 +18,331 @@
 
 namespace App\Api\Controller\Posts;
 
-use App\Api\Serializer\CommentPostSerializer;
+use App\Api\Controller\Threads\ThreadHelper;
+use App\Api\Serializer\AttachmentSerializer;
 use App\Api\Serializer\PostSerializer;
-use App\Common\CacheKey;
-use App\Common\PostCache;
+use App\Common\ResponseCode;
+use App\Formatter\Formatter;
+use App\Models\Attachment;
 use App\Models\Post;
+use App\Models\Thread;
 use App\Models\User;
-use App\Models\ThreadReward;
-use App\Repositories\PostRepository;
-use Discuz\Api\Controller\AbstractListController;
-use Discuz\Auth\AssertPermissionTrait;
-use Discuz\Common\Utils;
-use Illuminate\Contracts\Routing\UrlGenerator;
+use App\Models\UserWalletLog;
+use App\Providers\PostServiceProvider;
+use App\Repositories\UserRepository;
+use Discuz\Base\DzqController;
+use Illuminate\Contracts\Auth\Access\Gate;
 use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Str;
-use Psr\Http\Message\ServerRequestInterface;
-use Tobscure\JsonApi\Document;
-use Tobscure\JsonApi\Exception\InvalidParameterException;
 
-class ListPostsController extends AbstractListController
+class ListPostsController extends DzqController
 {
-    use AssertPermissionTrait;
+    protected $postSerializer;
 
-    /**
-     * {@inheritdoc}
-     */
-    public $serializer = PostSerializer::class;
+    protected $attachmentSerializer;
 
-    /**
-     * {@inheritdoc}
-     */
-    public $include = [
-        'user',
-        'replyUser',
-        'commentUser',
-        'images',
+    protected $gate;
+
+    public $providers = [
+        PostServiceProvider::class,
     ];
 
-    /**
-     * {@inheritdoc}
-     */
-    public $optionalInclude = [
-        'user.groups',
-        'thread.category',
-        'thread.firstPost',
-        'lastThreeComments',
-        'lastThreeComments.user',
-        'lastThreeComments.replyUser',
-        'lastThreeComments.commentUser',
-        'lastThreeComments.images',
-        'deletedUser',
-        'lastDeletedLog',
-    ];
-
-    /**
-     * {@inheritdoc}
-     */
-    public $mustInclude = [
-        'thread',
-        'likeState',
-    ];
-
-    /**
-     * {@inheritdoc}
-     */
-    public $sortFields = [
-        'id',
-        'replyCount',
-        'likeCount',
-        'createdAt',
-        'updatedAt',
-        'deletedAt',
-    ];
-
-    /**
-     * @var PostRepository
-     */
-    protected $posts;
-
-    /**
-     * @var UrlGenerator
-     */
-    protected $url;
-
-    /**
-     * @var int|null
-     */
-    protected $postCount;
-
-    /**
-     * @var string
-     */
-    protected $tablePrefix;
-    protected $cache;
-    private $postCache;
-
-    /**
-     * @param PostRepository $posts
-     * @param UrlGenerator $url
-     */
-    public function __construct(PostRepository $posts, UrlGenerator $url)
-    {
-        $this->posts = $posts;
-        $this->url = $url;
-        $this->tablePrefix = config('database.connections.mysql.prefix');
-        $this->postCache = new PostCache();
-        $this->cache = app('cache');
+    public function __construct(
+        PostSerializer $postSerializer,
+        AttachmentSerializer $attachmentSerializer,
+        Gate $gate
+    ) {
+        $this->postSerializer = $postSerializer;
+        $this->attachmentSerializer = $attachmentSerializer;
+        $this->gate = $gate;
     }
 
-    /**
-     * {@inheritdoc}
-     * @throws InvalidParameterException
-     */
-    protected function data(ServerRequestInterface $request, Document $document)
+    protected function checkRequestPermissions(UserRepository $userRepo)
     {
-        $actor = $request->getAttribute('actor');
-        $params = $request->getQueryParams();
-        $filter = $this->extractFilter($request);
-        $sort = $this->extractSort($request);
-
-        $threadId = Arr::get($filter, 'thread');
-        if(!empty($threadId)){
-            $threadQuestionType = ThreadReward::query()->where('thread_id', $threadId)->first();
-        }
-        
-        if(!isset($threadQuestionType->type) || ($threadQuestionType->type !== 0)){
-            //设置评论列表第一页缓存
-            list($cacheKey, $posts) = $this->getCache($params,$filter, $document);
-            if ($posts) {
-                return $posts;
-            }
-        }
-        $limit = $this->extractLimit($request);
-        $offset = $this->extractOffset($request);
-        $include = $this->extractInclude($request);
-        $posts = $this->search($actor, $filter, $sort, $limit, $offset);
-        $this->addDocument($document, $params, $this->postCount, $offset, $limit);
-        Post::setStateUser($actor);
-        // 特殊关联：最后三条点评
-        if (in_array('lastThreeComments', $include)) {
-            $posts = $this->loadLastThreeComments($posts);
-        }
-
-        // 特殊关联：最后一次删除的日志
-        if (in_array('lastDeletedLog', $include)) {
-            $posts->map(function ($post) {
-                $log = $post->logs()
-                    ->with('user')
-                    ->where('action', 'hide')
-                    ->orderBy('created_at', 'desc')
-                    ->first();
-
-                $post->setRelation('lastDeletedLog', $log);
-            });
-        }
-
-        // 高亮敏感词
-        if (Arr::get($filter, 'highlight') == 'yes') {
-            $posts->load('stopWords');
-
-            $posts->map(function (Post $post) {
-                if ($post->stopWords) {
-                    $stopWords = explode(',', $post->stopWords->stop_word);
-                    $replaceWords = array_map(function ($word) {
-                        return '<span class="highlight">' . $word . '</span>';
-                    }, $stopWords);
-
-                    $content = str_replace($stopWords, $replaceWords, $post->content);
-                    $post->content = $content;
-                }
-            });
-        }
-        $posts->loadMissing($include);
-
-        $posts->map(function ($post) {
-            $post->rewards = floatval(sprintf('%.2f', $post->getPostReward()));
-        });
-
-        if($params['sort'] == 'createdAt'){
-            $sorted = $posts->sortByDesc('rewards');
-            $posts = $sorted->values();
-        }
-
-        if($this->canCache($params) && !empty($cacheKey)){
-            $this->postCache->setPosts($posts);
-            $this->cache->put($cacheKey, serialize($this->postCache), 5 * 60);
-        }
-        return $posts;
-    }
-
-    /**
-     *从缓存中取出第一页评论数据
-     * @param $filter
-     * @param $document
-     * @return array
-     */
-    private function getCache($params, $filter, $document)
-    {
-        $isMobile = Utils::isMobile() ? 1 : 0;
-        $threadId = Arr::get($filter, 'thread');
-        $cacheKey = CacheKey::POST_RESOURCE_BY_ID . $isMobile . $threadId;
-        if (!$this->canCache($params)) {
-            return [$cacheKey, false];
-        }
-        $data = $this->cache->get($cacheKey);
-        if (!empty($data)) {
-            $obj = unserialize($data);
-            $metaLinks = $obj->getMetaLinks();
-            $posts = $obj->getPosts();
-            $this->addDocument($document, $metaLinks['params'], $metaLinks['count'], $metaLinks['offset'], $metaLinks['limit']);
-            if ($posts->count() != 0 && $metaLinks['count'] != 0) {
-                return [$cacheKey, $posts];
-            }
-        }
-        return [$cacheKey, false];
-    }
-
-    private function canCache($params)
-    {
-        //pc端倒序不允许使用缓存
-        if (isset($params['sort']) && $params['sort'] == '-createdAt') {
+        $filters = $this->inPut('filter') ?: [];
+        $threadId = Arr::get($filters, 'thread');
+        // 只有管理员能查看所有回复，暂时兼容管理后台
+        if (!$threadId && !$this->user->isAdmin()) {
             return false;
         }
-        if (isset($params['filter'])) {
-            if (!isset($params['filter']['isComment'])) {
-                return false;
-            }
-            if (strtolower($params['filter']['isComment']) == 'yes') {
-                return false;
-            }
+
+        $thread = Thread::query()
+            ->where(['id' => $threadId])
+            ->whereNull('deleted_at')
+            ->first();
+        if (!$thread) {
+            $this->outPut(ResponseCode::RESOURCE_NOT_FOUND);
         }
-        $canCache = false;
-        if (isset($params['include'])) {
-            if ($params['include'] == 'firstPost') {
-                $canCache = true;
-            }
-        }
-        if (isset($params['page'])) {
-            if ($params['page']['number'] == 1) {
-                $canCache = true;
-            }
-        }
-        return $canCache;
+
+        return $userRepo->canViewThreadDetail($this->user, $thread);
     }
 
-    private function addDocument($document, $params, $count, $offset, $limit)
+    public function main()
     {
-        $document->addPaginationLinks(
-            $this->url->route('posts.index'),
-            $params,
-            $offset,
-            $limit,
-            $this->postCount
-        );
+        $this->attachmentSerializer->setRequest($this->request);
 
-        $document->setMeta([
-            'postCount' => $count,
-            'pageCount' => ceil($count / $limit),
-        ]);
-        $this->postCache->setMetaLinks([
-            'params' => $params,
-            'count' => $count,
-            'offset' => $offset,
-            'limit' => $limit
-        ]);
+        /** @var User $user */
+        $user = $this->user;
+        $this->gate = $this->gate->forUser($user);
+
+        $filters = $this->inPut('filter') ?: [];
+        $page = $this->inPut('page') ?: 1;
+        $perPage = $this->inPut('perPage') ?: 5;
+        $sort = $this->inPut('sort');
+
+        $posts = $this->search($filters, $perPage, $page, $sort);
+        $posts['pageData'] = $posts['pageData']->map(function ($post) {
+            return $this->getPost($post, true);
+        });
+        $sortBy = 'sortBy';
+        if (!empty($sort)) {
+            $sortBy = Str::startsWith($sort, '-') ? 'sortByDesc' : 'sortBy';
+        }
+        $posts['pageData'] = $this->postsSortOperate($posts['pageData'], $sortBy);
+
+        $posts['pageData'] = $this->getLastThreeComments($posts['pageData']);
+
+        $this->outPut(ResponseCode::SUCCESS, '', $posts);
     }
 
-    /**
-     * @param $actor
-     * @param $filter
-     * @param $sort
-     * @param int|null $limit
-     * @param int $offset
-     *
-     * @return Collection
-     */
-    private function search($actor, $filter, $sort, $limit = null, $offset = 0)
+    protected function search(array $filters, int $perPage, int $page, $sort)
     {
-        $query = $this->posts->query()->select('posts.*')->whereVisibleTo($actor);
+        Post::setStateUser($this->user);
+        $query = Post::query()
+            ->with([
+                'thread:id,type,category_id',
+                'user:id,username,nickname,avatar,realname',
+                'user.groups:id,name,is_display,level',
+                'images',
+                'likeState',
+            ])
+            ->select('posts.*');
 
-        $this->applyFilters($query, $filter, $actor);
+        $this->applyFilters($query, $filters, $sort);
 
-        $this->postCount = $limit > 0 ? $query->count() : null;
-
-        $query->skip($offset)->take($limit);
-
-        foreach ((array)$sort as $field => $order) {
-            $query->orderBy(Str::snake($field), $order);
-        }
-
-        // TODO: 搜索事件，给插件一个修改它的机会。
-        // $this->events->dispatch(new Searching($search, $criteria));
-
-        return $query->get();
+        return $this->pagination($page, $perPage, $query, false);
     }
 
-    /**
-     * @param Builder $query
-     * @param array $filter
-     * @param User $actor
-     */
-    private function applyFilters(Builder $query, array $filter, User $actor)
+    protected function applyFilters(Builder $query, array $filters, $sort)
     {
-        $query->where('posts.is_first', false);
+        $query->where('posts.is_first', false)
+            ->whereNull('posts.deleted_at')
+            ->where('posts.is_comment', false);
 
-        // 作者 ID
-        if ($userId = Arr::get($filter, 'userId')) {
-            $query->where('posts.user_id', $userId);
-        }
-
-        // 作者用户名
-        if ($username = Arr::get($filter, 'username')) {
-            $query->leftJoin('users as users1', 'users1.id', '=', 'posts.user_id')
-                ->where('users1.username', 'like', "%{$username}%");
-        }
-
-        // 操作删除者 ID
-        if ($deletedUserId = Arr::get($filter, 'deletedUserId')) {
-            $query->where('posts.deleted_user_id', $deletedUserId);
-        }
-
-        // 操作删除者用户名
-        if ($deletedUsername = Arr::get($filter, 'deletedUsername')) {
-            $query->leftJoin('users as users2', 'users2.id', '=', 'posts.deleted_user_id')
-                ->where('users2.username', 'like', "%{$deletedUsername}%");
-        }
-
-        // 发表于（开始时间）
-        if ($createdAtBegin = Arr::get($filter, 'createdAtBegin')) {
-            $query->where('posts.created_at', '>=', $createdAtBegin);
-        }
-
-        // 发表于（结束时间）
-        if ($createdAtEnd = Arr::get($filter, 'createdAtEnd')) {
-            $query->where('posts.created_at', '<=', $createdAtEnd);
-        }
-
-        // 删除于（开始时间）
-        if ($deletedAtBegin = Arr::get($filter, 'deletedAtBegin')) {
-            $query->where('posts.deleted_at', '>=', $deletedAtBegin);
-        }
-
-        // 删除于（结束时间）
-        if ($deletedAtEnd = Arr::get($filter, 'deletedAtEnd')) {
-            $query->where('posts.deleted_at', '<=', $deletedAtEnd);
-        }
-
-        // 分类
-        if ($categoryId = Arr::get($filter, 'categoryId')) {
-            $query->leftJoin('threads', 'threads.id', '=', 'posts.thread_id')
-                ->where('threads.category_id', $categoryId);
+        if ($sort) {
+            $field = ltrim(Str::snake($sort), '-');
+            $query->orderBy($field, Str::startsWith($sort, '-') ? 'desc' : 'asc');
         }
 
         // 主题
-        if ($threadId = Arr::get($filter, 'thread')) {
+        $threadId = Arr::get($filters, 'thread');
+        if ($threadId) {
             $query->where('posts.thread_id', $threadId);
         }
 
-        // 回复
-        if ($replyId = Arr::get($filter, 'reply')) {
-            $query->where('posts.reply_post_id', $replyId);
-        }
-
-        // 待审核
-        $isApproved = Arr::get($filter, 'isApproved');
-        if ($isApproved === '1') {
-            $query->where('posts.is_approved', Post::APPROVED);
-        } elseif ($actor->can('approvePosts')) {
-            if ($isApproved === '0') {
-                $query->where('posts.is_approved', Post::UNAPPROVED);
-            } elseif ($isApproved === '2') {
-                $query->where('posts.is_approved', Post::IGNORED);
+        $user = $this->user;
+        //如果是审核状态只能自己看到
+        if (!$user->isAdmin()) {
+            //如果是游客
+            if ($user->isGuest()) {
+                $query->where('posts.is_approved', Post::APPROVED_YES);
+            } else {
+                $notUser = Post::query()
+                    ->where('user_id', '<>', $user->id)
+                    ->where('is_approved', '<>', Post::APPROVED_YES)
+                    ->where(['is_first' => false , 'thread_id' => $threadId])
+                    ->get(['id'])
+                    ->pluck('id')
+                    ->toArray();
+                if ($notUser) {
+                    $query->whereNotIn('posts.id', $notUser);
+                }
             }
         }
 
-        // 回收站
-        if ($isDeleted = Arr::get($filter, 'isDeleted')) {
-            if ($isDeleted == 'yes' && $actor->can('viewTrashed')) {
-                // 只看回收站帖子
-                $query->whereNotNull('posts.deleted_at');
-            } elseif ($isDeleted == 'no') {
-                // 不看回收站帖子
-                $query->whereNull('posts.deleted_at');
-            }
-        }
 
-        // 是否是评论
-        if ($isComment = Arr::get($filter, 'isComment')) {
-            if ($isComment == 'yes') {
-                $this->serializer = CommentPostSerializer::class;
-
-                $query->where('posts.is_comment', true);
-            } elseif ($isComment == 'no') {
-                $query->where('posts.is_comment', false);
-            }
-        }
-
-        // 关键词搜索
-        $queryWord = Arr::get($filter, 'q');
-        $query->when($queryWord, function ($query, $queryWord) {
-            $query->where('content', 'like', "%{$queryWord}%")->where('is_first', false);
-        });
-
-        // event(new ConfigurePostsQuery($query, $filter));
+        $query->orderBy('created_at');
     }
 
-    /**
-     * 特殊关联：最新三条点评
-     *
-     * @param Collection $posts
-     * @return Collection
-     */
-    public function loadLastThreeComments(Collection $posts)
+    protected function getLastThreeComments($posts)
     {
-        $postIds = $posts->pluck('id');
+        $postIds = array_column($posts, 'id');
 
+        $tablePrefix = config('database.connections.mysql.prefix');
         $subSql = Post::query()
             ->selectRaw('count(*)')
-            ->whereRaw($this->tablePrefix . 'a.`id` < `id`')
-            ->whereRaw($this->tablePrefix . 'a.`reply_post_id` = `reply_post_id`')
-            ->whereRaw($this->tablePrefix . 'a.`deleted_at` = `deleted_at`')
-            ->whereRaw($this->tablePrefix . 'a.`is_first` = `is_first`')
-            ->whereRaw($this->tablePrefix . 'a.`is_comment` = `is_comment`')
-            ->whereRaw($this->tablePrefix . 'a.`is_approved` = `is_approved`')
+            ->whereRaw($tablePrefix.'a.`id` < `id`')
+            ->whereRaw($tablePrefix.'a.`reply_post_id` = `reply_post_id`')
+            ->whereRaw($tablePrefix.'a.`deleted_at` = `deleted_at`')
+            ->whereRaw($tablePrefix.'a.`is_first` = `is_first`')
+            ->whereRaw($tablePrefix.'a.`is_comment` = `is_comment`')
+            ->whereRaw($tablePrefix.'a.`is_approved` = `is_approved`')
             ->toSql();
 
         $allLastThreeComments = Post::query()
+            ->with([
+                'thread:id,type,category_id',
+                'user:id,nickname,avatar,realname',
+                'user.groups:id,name,is_display,level',
+                'commentUser:id,nickname,avatar,realname',
+                'replyUser:id,nickname,avatar,realname',
+                'images',
+            ])
             ->from('posts', 'a')
-            ->whereRaw('(' . $subSql . ') < ?', [3])
+            ->whereRaw('('.$subSql.') < ?', [3])
             ->whereIn('reply_post_id', $postIds)
             ->whereNull('deleted_at')
             ->where('is_first', false)
             ->where('is_comment', true)
-            ->where('is_approved', Post::APPROVED)
             ->orderBy('updated_at', 'desc')
-            ->get()
-            ->map(function (Post $post) {
-                $content = Str::of($post->content);
+            ->get();
+//            ->map(function (Post $post) {
+//                $content = Str::of($post->content);
+//                if ($content->length() > Post::SUMMARY_LENGTH) {
+//                    $post->content = $content->substr(0, Post::SUMMARY_LENGTH)->finish(Post::SUMMARY_END_WITH);
+//                }
+//
+//                return $post;
+//            });
 
-                if ($content->length() > Post::SUMMARY_LENGTH) {
-                    $post->content = $content->substr(0, Post::SUMMARY_LENGTH)->finish(Post::SUMMARY_END_WITH);
+        $posts = array_map(function ($post) use ($allLastThreeComments) {
+            $twoPosts =  $allLastThreeComments->where('reply_post_id', $post['id'])->take(3)->values();
+            $lastThreeComments = [];
+            //触发审核只有管理员和自己能看到
+            foreach ($twoPosts as $posts) {
+                if ($posts['is_approved'] != Post::APPROVED && $this->user->id != $posts['user_id'] && !$this->user->isAdmin()) {
+                    continue;
                 }
-
-                return $post;
-            });
-
-        $posts->map(function (Post $post) use ($allLastThreeComments) {
-            $post->setRelation('lastThreeComments', $allLastThreeComments->where('reply_post_id', $post->id)->take(3));
-        });
+                $lastThreeComments[] =  $this->getPost($posts, false);
+            }
+            $post['lastThreeComments'] = $lastThreeComments;
+            return $post;
+        }, $posts);
 
         return $posts;
+    }
+
+    protected function getPost(Post $post, bool $getRedPacketAmount)
+    {
+        $userRepo = app(UserRepository::class);
+
+        if ($getRedPacketAmount && !$this->user->isGuest()) {
+            $auditCount = Post::query()
+                ->where('reply_post_id', $post['id'])
+                ->where('is_approved', '<>', Post::APPROVED);
+            if (!$this->user->isAdmin()) {
+                $auditCount->where('user_id', $this->user->id);
+            }
+            $auditCount = $auditCount->count();
+            $post['reply_count'] = intval($post['reply_count'] + $auditCount);
+        }
+
+        $data = [
+            'id' => $post['id'],
+            'userId' => $post['user_id'],
+            'threadId' => $post['thread_id'],
+            'replyPostId' => $post['reply_post_id'],
+            'replyUserId' => $post['reply_user_id'],
+            'commentPostId' => $post['comment_post_id'],
+            'commentUserId' => $post['comment_user_id'],
+//            'content' => str_replace(['<t><p>', '</p></t>'], ['', ''],$post['content']),
+            'replyCount' => $post['reply_count'],
+            'likeCount' => $post['like_count'],
+            'createdAt' => optional($post->created_at)->format('Y-m-d H:i:s'),
+            'updatedAt' => optional($post->updated_at)->format('Y-m-d H:i:s'),
+            'isFirst' => $post['is_first'],
+            'isComment' => $post['is_comment'],
+            'isApproved' => $post['is_approved'],
+            'rewards' => floatval(sprintf('%.2f', $post->getPostReward(UserWalletLog::TYPE_INCOME_THREAD_REWARD))),
+            'canApprove' => $this->user->isAdmin(),
+            'canDelete' => $this->user->isAdmin(),
+            'canHide' => $userRepo->canHidePost($this->user, $post),
+            'canLike' => $userRepo->canLikePosts($this->user),
+            'user' => $this->getUser($post->user),
+            'images' => $post->images->map(function (Attachment $image) {
+                return $this->attachmentSerializer->getDefaultAttributes($image);
+            }),
+            'likeState' => $post->likeState,
+            'summaryText' => str_replace(['<t><p>', '</p></t>'], ['', ''], $post->summary_text),
+        ];
+        if ($post->thread->type != Thread::TYPE_OF_ALL) {     //老数据
+            $data['content']  =  app()->make(Formatter::class)->render($post['content']);
+        } else {
+//            $content = str_replace(['<r>', '</r>', '<t>', '</t>'], ['', '', '', ''], $post['content']);
+//            list($searches, $replaces) = ThreadHelper::getThreadSearchReplace($content);
+//            $data['content'] = str_replace($searches, $replaces, $content);
+            $data['content'] = $post['content'];
+        }
+
+        if ($post->deleted_at) {
+            $data['isDeleted'] = true;
+            $data['deletedAt'] = $post->deleted_at->format('Y-m-d H:i:s');
+        } else {
+            $data['isDeleted'] = false;
+        }
+
+        if ($getRedPacketAmount) {
+            $data['redPacketAmount'] = $this->postSerializer->getPostRedPacketAmount($post['id'], $post['thread_id'], $post['user_id']);
+        }
+
+        if ($post->relationLoaded('replyUser')) {
+            $data['replyUser'] = $post->replyUser;
+        }
+
+        if ($likeState = $post->likeState) {
+            $data['isLiked'] = true;
+            $data['likedAt'] = $likeState->created_at->format('Y-m-d H:i:s');
+        } else {
+            $data['isLiked'] = false;
+        }
+
+        if ($post->relationLoaded('commentUser')) {
+            $data['commentUser'] = $this->getUser($post->commentUser);
+        }
+
+        if ($post->relationLoaded('replyUser')) {
+            $data['replyUser'] = $this->getUser($post->replyUser);
+        }
+
+        return $data;
+    }
+
+    protected function getUser(?User $user)
+    {
+        if (!$user) {
+            return null;
+        }
+
+        $userData = $user->toArray();
+        unset($userData['username']);
+        $data = array_merge($userData, [
+            'isReal' => !empty($user->realname)
+        ]);
+        if ($user->relationLoaded('groups')) {
+            $groupInfos = $user->groups->toArray();
+            $isDisplay = $groupInfos[0]['is_display'];
+            $data['groups'] = [
+                'id' => $groupInfos[0]['id'],
+                'name' => $isDisplay ? $groupInfos[0]['name'] : '',
+                'isDisplay' => $isDisplay,
+                'level' => $isDisplay ? $groupInfos[0]['level'] : 0
+            ];
+        }
+
+        return $data;
+    }
+
+    protected function postsSortOperate($postsPageData, $sortBy)
+    {
+        $postsNotRewards = $postsPageData->where('rewards', '0.0')->$sortBy('createdAt');
+        $postsRewards = $postsPageData->filter(function ($value) {
+            return $value['rewards'] > 0;
+        })->sortByDesc('rewards');
+        $pageData = $postsNotRewards->values()->toArray();
+        if ($postsRewards->isNotEmpty()) {
+            $pageData = $postsRewards->merge($postsNotRewards)->values()->toArray();
+        }
+        return $pageData;
     }
 }

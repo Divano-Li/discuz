@@ -18,41 +18,42 @@
 
 namespace App\Api\Controller\Group;
 
-use App\Api\Serializer\GroupSerializer;
 use App\Models\Group;
-use Discuz\Api\Controller\AbstractListController;
-use Discuz\Auth\AssertPermissionTrait;
+use App\Common\ResponseCode;
+use App\Models\Sequence;
+use App\Repositories\UserRepository;
+use Discuz\Base\DzqAdminController;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Arr;
-use Psr\Http\Message\ServerRequestInterface;
-use Tobscure\JsonApi\Document;
 
-class ListGroupsController extends AbstractListController
+class ListGroupsController extends DzqAdminController
 {
-    use AssertPermissionTrait;
-    /**
-     * {@inheritdoc}
-     */
-    public $serializer = GroupSerializer::class;
-
-    /**
-     * {@inheritdoc}
-     */
-    public $optionalInclude = ['permission'];
-
-    /**
-     * {@inheritdoc}
-     */
-    protected function data(ServerRequestInterface $request, Document $document)
+    protected function checkRequestPermissions(UserRepository $userRepo)
     {
-        $this->assertRegistered($request->getAttribute('actor'));
+        return $userRepo->canListGroup($this->user);
+    }
 
-        $include = $this->extractInclude($request);
-        $filter = $this->extractFilter($request);
+    public function main()
+    {
+        $include = $this->inPut('include');
+        $filter = $this->inPut('filter');
 
-        $isDefault = (bool) Arr::get($filter, 'isDefault', false);
         $type = Arr::get($filter, 'type', '');
         $isPaid = Arr::get($filter, 'isPaid', '');
+        $isDefault = (bool) Arr::get($filter, 'isDefault', false);
+
+        if (!empty($isPaid)) {
+            $this->dzqValidate($filter, [
+                'isPaid' => 'integer|in:0,1'
+            ]);
+        }
+        if (!empty($isDefault)) {
+            $this->dzqValidate($filter, [
+                'isDefault' => 'integer'
+            ]);
+        }
+
+        $this->checkDefault();
 
         $groups = Group::query()
             ->where('id', '<>', Group::UNPAID)
@@ -62,27 +63,64 @@ class ListGroupsController extends AbstractListController
             ->when($isPaid != '', function (Builder $query) use ($isPaid) {
                 return $query->where('is_paid', (bool) $isPaid);
             })
-            ->when($type === 'invite', function (Builder $query) use ($include,$request) {
+            ->when($type === 'invite', function (Builder $query) use ($include) {
                 // 邀请用户组关联权限不返回 分类下权限
                 if (in_array('permission', $include)) {
-                    $query->with(['permission' => function ($query) {
-                        $query->where('permission', 'not like', 'category%')
-                            ->where('permission', 'not like', 'switch.%');
-                    }]);
+                    $query->with([
+                        'permission' => function ($query) {
+                            $query->where('permission', 'not like', 'category%')
+                                ->where('permission', 'not like', 'switch.%');
+                        },
+                    ]);
                 }
-
-                //只有管理员用户组可以展示邀请管理员
-                if (!$request->getAttribute('actor')->isAdmin()) {
-                    $query->where('id', '<>', Group::ADMINISTRATOR_ID);
-                }
-
                 // 不返回游客用户组
-                // no guest
                 return $query->where('id', '<>', Group::GUEST_ID);
-                // or more
-                // return $query->whereNotIn('id', [Group::GUEST_ID]);
             });
+        $data = [];
+        foreach ($groups->get() as $lists) {
+            $data [] = [
+                'id' => $lists['id'],
+                'name' => $lists['name'],
+                'type' => $lists['type'],
+                'default' => $lists['default'],
+                'isDisplay' => $lists['is_display'],
+                'isPaid' => $lists['is_paid'],
+                'fee' => $lists['fee'],
+                'days' => $lists['days'],
+                'scale' => $lists['scale'],
+                'isSubordinate' => $lists['is_subordinate'],
+                'isCommission' => $lists['is_commission'],
+                'checked'           => in_array($lists['id'], $this->getCheckList()) ? 1 : 0,
+                'level' => $lists['level'],
+                'description' => $lists['description'],
+                'notice' => $lists['notice']
+            ];
+        }
+        $data = $this->camelData($data);
 
-        return $groups->get()->loadMissing($include);
+        $this->outPut(ResponseCode::SUCCESS, '', $data);
+    }
+
+    public function getCheckList()
+    {
+        $groupsList = Sequence::query()->first();
+        if (empty($groupsList)) {
+            return [];
+        }
+        $groupsList = explode(',', $groupsList['group_ids']);
+        return $groupsList;
+    }
+
+    public function checkDefault()
+    {
+        $num = Group::query()->where('is_paid', Group::IS_PAID)->where('default', 1)->count();
+        if ($num == 0) {
+            return;
+        }
+        Group::query()->where('is_paid', Group::IS_PAID)->update(['default'=>0]);
+        $num = Group::query()->where('default', 1)->count();
+        if ($num == 0) {
+            Group::query()->where('id', Group::MEMBER_ID)->update(['default'=>1]);
+        }
     }
 }

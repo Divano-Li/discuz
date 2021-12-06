@@ -18,90 +18,147 @@
 
 namespace App\Api\Controller\Posts;
 
-use App\Api\Serializer\CommentPostSerializer;
 use App\Api\Serializer\PostSerializer;
 use App\Commands\Post\EditPost;
+use App\Common\CacheKey;
+use App\Common\ResponseCode;
 use App\Models\Post;
-use Discuz\Api\Controller\AbstractResourceController;
+use App\Models\PostUser;
+use App\Models\Thread;
+use App\Models\ThreadUser;
+use App\Models\User;
+use App\Repositories\UserRepository;
+use Discuz\Base\DzqCache;
+use Discuz\Base\DzqController;
 use Illuminate\Contracts\Bus\Dispatcher;
 use Illuminate\Support\Arr;
-use Psr\Http\Message\ServerRequestInterface;
-use Tobscure\JsonApi\Document;
 
-class UpdatePostController extends AbstractResourceController
+class UpdatePostController extends DzqController
 {
-    /**
-     * {@inheritdoc}
-     */
-    public $serializer = PostSerializer::class;
-
-    /**
-     * {@inheritdoc}
-     */
-    public $include = [
-        'user',
-        'thread',
-        'lastThreeComments',
-        'lastThreeComments.user',
-        'lastThreeComments.replyUser',
-        'lastThreeComments.commentUser',
-    ];
-
-    /**
-     * {@inheritdoc}
-     */
-    public $optionalInclude = [
-        'images',
-        'logs',
-    ];
-
-    /**
-     * @var Dispatcher
-     */
     protected $bus;
 
-    /**
-     * @param Dispatcher $bus
-     */
-    public function __construct(Dispatcher $bus)
-    {
+    protected $postSerializer;
+
+    public function __construct(
+        PostSerializer $postSerializer,
+        Dispatcher $bus
+    ) {
+        $this->postSerializer = $postSerializer;
         $this->bus = $bus;
     }
 
-    /**
-     * {@inheritdoc}
-     */
-    protected function data(ServerRequestInterface $request, Document $document)
+    protected function checkRequestPermissions(UserRepository $userRepo)
     {
-        $actor = $request->getAttribute('actor');
-        $postId = Arr::get($request->getQueryParams(), 'id');
-        $data = $request->getParsedBody()->get('data', []);
+        if ($this->user->isGuest()) {
+            $this->outPut(ResponseCode::JUMP_TO_LOGIN);
+        }
+        if ($this->user->status == User::STATUS_NEED_FIELDS) {
+            $this->outPut(ResponseCode::JUMP_TO_SIGIN_FIELDS);
+        }
+        if ($this->user->status == User::STATUS_MOD) {
+            $this->outPut(ResponseCode::JUMP_TO_AUDIT);
+        }
 
-        /** @var Post $post */
+        $post = Post::query()->where(['id' => $this->inPut('postId')])->first();
+        if (!$post) {
+            $this->outPut(ResponseCode::RESOURCE_NOT_FOUND);
+        }
+
+        $data = $this->inPut('data', []);
+        $data = Arr::get($data, 'attributes', []);
+
+        // TODO 暂时改为只有管理员可审核和编辑
+        if (isset($data['content']) || (isset($data['isApproved']) && $data['isApproved'] < 3)) {
+            return $this->user->isAdmin();
+        }
+
+        if (isset($data['isDeleted'])) {
+            return $userRepo->canHidePost($this->user, $post);
+        }
+
+        if (isset($data['isLiked'])) {
+            if (!$post->thread) {
+                $this->outPut(ResponseCode::RESOURCE_NOT_FOUND);
+            }
+            return $userRepo->canLikePosts($this->user) && ($userRepo->canViewThreads($this->user, $post->thread->category_id) || $userRepo->canViewThreadDetail($this->user, $post->thread));
+        }
+
+        return $userRepo->canViewThreads($this->user, $post->thread->category_id);
+    }
+
+    public function main()
+    {
+        $actor = $this->user;
+        $postId = $this->inPut('postId');
+        if (empty($postId)) {
+            $this->outPut(ResponseCode::INVALID_PARAMETER);
+        }
+
+        $data = $this->inPut('data', []);
+
+        if (empty($data)) {
+            $this->outPut(ResponseCode::INVALID_PARAMETER);
+        }
+
         $post = $this->bus->dispatch(
             new EditPost($postId, $actor, $data)
         );
 
-        if ($post->is_comment) {
-            $this->serializer = CommentPostSerializer::class;
+        $threadId = $post['thread_id'];
+
+        $isFavorite = ThreadUser::query()->where('thread_id', $threadId)->where('user_id', $actor->id)->exists();
+        $thread = Thread::query()->where('id', $threadId)->first(['rewarded_count', 'paid_count']);
+
+        $content = '';
+        if (!empty($data['attributes']['content'])) {
+            $content = $data['attributes']['content'];
         }
 
-        // 被回复帖子的最后三条回复
-        $post->setRelation(
-            'lastThreeComments',
-            Post::query()
-                ->where('reply_post_id', $post->reply_post_id)
-                ->whereNull('deleted_at')
-                ->where('is_first', false)
-                ->where('is_comment', true)
-                ->where('is_approved', Post::APPROVED)
-                ->orderBy('updated_at', 'desc')
-                ->limit(3)
-                ->get()
-        );
+        if (PostUser::query()->where('post_id', $postId)->where('user_id', $actor->id)->first()) {
+            $isLiked = true;
+        } else {
+            $isLiked = false;
+        }
+        if (isset($data['attributes']['isLiked'])) {
+            $isLiked = $data['attributes']['isLiked'];
+        }
 
-        $post->rewards = floatval(sprintf('%.2f', $post->getPostReward()));
+        $build = [
+            'pid' => $postId,
+            'postId' => $postId,
+            'threadId' => $threadId,
+            'content' => str_replace(['<t><p>', '</p></t>'], ['', ''], $content),
+            'likeCount' => $post['like_count'],
+            'likePayCount' => $post['like_count'] + $thread['rewarded_count'] + $thread['paid_count'],
+            'replyCount' => $post['reply_count'],
+            'isFirst' => $post['is_first'],
+            'isApproved' => $post['is_approved'],
+            'updatedAt' => optional($post['updated_at'])->format('Y-m-d H:i:s'),
+            'isLiked' => $isLiked,
+            'canLike' => $this->user->can('like', $post),
+            'canFavorite' => (bool)$this->user->can('favorite', $post),
+            'isFavorite' => $isFavorite,
+            'rewards' => floatval(sprintf('%.2f', $post->getPostReward())),
+            'redPacketAmount' => $this->postSerializer->getPostRedPacketAmount($post['id'], $post['thread_id'], $post['user_id']),
+        ];
+        if ($post->id == $postId) {
+            $this->outPut(ResponseCode::SUCCESS, '', $build);
+        }
 
-        return $post->loadMissing($this->extractInclude($request));
+        $this->outPut(ResponseCode::NET_ERROR, '', []);
+    }
+
+    public function prefixClearCache($user)
+    {
+        $postId = $this->inPut('postId');
+        DzqCache::delHashKey(CacheKey::LIST_THREADS_V3_POST_LIKED . $user->id, $postId);
+        DzqCache::delKey(CacheKey::LIST_THREADS_V3_COMPLEX);
+        $post = Post::query()->where('id', $postId)->first();
+        if (!empty($post)) {
+            $threadId = $post['thread_id'];
+            DzqCache::delHashKey(CacheKey::LIST_THREADS_V3_THREADS, $threadId);
+            DzqCache::delHashKey(CacheKey::LIST_THREADS_V3_POSTS, $threadId);
+            DzqCache::delHashKey(CacheKey::LIST_THREADS_V3_POST_USERS, $threadId);
+        }
     }
 }

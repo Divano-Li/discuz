@@ -18,60 +18,30 @@
 
 namespace App\Api\Controller\Attachment;
 
-use App\Api\Serializer\AttachmentSerializer;
-use App\Exceptions\OrderException;
+use App\Common\ResponseCode;
 use App\Models\Attachment;
-use App\Models\Post;
-use App\Models\SessionToken;
 use App\Models\Thread;
-use App\Models\User;
 use App\Repositories\AttachmentRepository;
+use App\Repositories\UserRepository;
 use App\Settings\SettingsRepository;
 use Carbon\Carbon;
-use Discuz\Auth\AssertPermissionTrait;
-use Discuz\Auth\Exception\PermissionDeniedException;
-use Discuz\Auth\Guest;
-use Discuz\Http\DiscuzResponseFactory;
+use Discuz\Base\DzqController;
 use Exception;
 use GuzzleHttp\Client as HttpClient;
 use Illuminate\Contracts\Filesystem\Factory as Filesystem;
-use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Str;
 use Intervention\Image\ImageManager;
-use Psr\Http\Message\ResponseInterface;
-use Psr\Http\Message\ServerRequestInterface;
-use Psr\Http\Server\RequestHandlerInterface;
 
-class ResourceAttachmentController implements RequestHandlerInterface
+class ResourceAttachmentController extends DzqController
 {
-    use AssertPermissionTrait;
+    private $attachment;
 
-    /**
-     * @var AttachmentRepository
-     */
-    protected $attachments;
+    protected function checkRequestPermissions(UserRepository $userRepo)
+    {
+        return true;
+    }
 
-    /**
-     * @var SettingsRepository
-     */
-    protected $settings;
-
-    /**
-     * @var Filesystem
-     */
-    protected $filesystem;
-
-    /**
-     * {}
-     */
-    public $serializer = AttachmentSerializer::class;
-
-    /**
-     * @param AttachmentRepository $attachments
-     * @param SettingsRepository $settings
-     * @param Filesystem $filesystem
-     */
     public function __construct(AttachmentRepository $attachments, SettingsRepository $settings, Filesystem $filesystem)
     {
         $this->attachments = $attachments;
@@ -79,27 +49,14 @@ class ResourceAttachmentController implements RequestHandlerInterface
         $this->filesystem = $filesystem;
     }
 
-    /**
-     * @param ServerRequestInterface $request
-     * @return ResponseInterface
-     * @throws OrderException
-     * @throws PermissionDeniedException
-     * @throws Exception
-     */
-    public function handle(ServerRequestInterface $request): ResponseInterface
+    public function main()
     {
-        $attachmentId = Arr::get($request->getQueryParams(), 'id');
-        $page = (int)Arr::get($request->getQueryParams(), 'page');
-        $token = SessionToken::get(Arr::get($request->getQueryParams(), 't', ''));
-        $isAttachment =  Arr::get($request->getQueryParams(), 'isAttachment', 0);
+        $page = $this->inPut('page');
+        $isAttachment = $this->inPut('isAttachment') ? $this->inPut('isAttachment') : 0;
 
-        if ($token) {
-            $user = $token->user ?? new Guest();
-        } else {
-            throw new PermissionDeniedException();
-        }
+        $user = $this->user;
 
-        $attachment = $this->getAttachment($attachmentId, $user);
+        $attachment = $this->getAttachment($user);
 
         if ($attachment->is_remote) {
             $httpClient = new HttpClient();
@@ -111,21 +68,19 @@ class ResourceAttachmentController implements RequestHandlerInterface
                 $response = $httpClient->get($url);
             } catch (Exception $e) {
                 if (Str::contains($e->getMessage(), 'FunctionNotEnabled')) {
-                    throw new Exception('qcloud_file_preview_unset');
+                    $this->outPut(ResponseCode::INVALID_PARAMETER, 'qcloud_file_preview_unset');
                 } else {
-                    throw new ModelNotFoundException();
+                    $this->outPut(ResponseCode::RESOURCE_NOT_FOUND, 'model_not_found');
                 }
             }
             if ($response->getStatusCode() == 200) {
                 if ($page) {
                     //预览
                     $data = [
-                        'data' => [
-                            'X-Total-Page' => $response->getHeader('X-Total-Page')[0],
-                            'image' => 'data:image/jpeg;base64,'.base64_encode($response->getBody())
-                        ],
+                        'X-Total-Page' => $response->getHeader('X-Total-Page')[0],
+                        'image' => 'data:image/jpeg;base64,'.base64_encode($response->getBody())
                     ];
-                    return DiscuzResponseFactory::JsonResponse($data);
+                    $this->outPut(ResponseCode::SUCCESS, '', $data);
                 } else {
                     //下载
                     if ($isAttachment) {
@@ -138,15 +93,10 @@ class ResourceAttachmentController implements RequestHandlerInterface
                             'Content-Disposition' => 'inline;filename=' . $attachment->file_name,
                         ];
                     }
-
-                    return DiscuzResponseFactory::FileStreamResponse(
-                        $response->getBody(),
-                        200,
-                        $header
-                    );
+                    $this->downloadFile($response->getBody(), $attachment->file_name, $header);
                 }
             } else {
-                throw new ModelNotFoundException();
+                $this->outPut(ResponseCode::RESOURCE_NOT_FOUND, 'model_not_found');
             }
         } else {
             $filePath = storage_path('app/' . $attachment->full_path);
@@ -154,7 +104,7 @@ class ResourceAttachmentController implements RequestHandlerInterface
             // 帖子图片直接显示
             if ($attachment->type == Attachment::TYPE_OF_IMAGE) {
                 // 是否要获取缩略图
-                if (Arr::get($request->getQueryParams(), 'thumb') === 'true') {
+                if (Arr::get($this->request->getQueryParams(), 'thumb') === 'true') {
                     $thumb = Str::replaceLast('.', '_thumb.', $filePath);
 
                     // 缩略图是否存在
@@ -169,31 +119,17 @@ class ResourceAttachmentController implements RequestHandlerInterface
 
                     $filePath = $thumb;
                 }
-
-                return DiscuzResponseFactory::FileResponse($filePath);
+                $this->downloadFile($filePath);
             }
-
-            return DiscuzResponseFactory::FileResponse($filePath, 200, [
-                'Content-Disposition' => 'attachment;filename=' . $attachment->file_name,
-            ]);
+            $this->downloadFile($filePath, $attachment->file_name);
         }
     }
 
-    /**
-     * @param int $attachmentId
-     * @param User $actor
-     * @return Attachment|null
-     * @throws OrderException
-     * @throws PermissionDeniedException
-     */
-    protected function getAttachment($attachmentId, $actor)
+    protected function getAttachment($actor)
     {
-        $attachment = $this->attachments->findOrFail($attachmentId, $actor);
+        $attachment = $this->attachment;
 
         $post = $attachment->post;
-
-        // 是否有权查看帖子
-        $this->assertCan($actor, 'view', $attachment->post ?? new Post());
 
         Thread::setStateUser($actor);
 
@@ -201,14 +137,51 @@ class ResourceAttachmentController implements RequestHandlerInterface
 
         // 主题是否收费
         if ($thread->price > 0 && ! $thread->is_paid) {
-            throw new OrderException('order_post_not_found');
+            $this->outPut(ResponseCode::RESOURCE_NOT_FOUND, trans('order.order_post_not_found'));
         }
 
         // 主题附件是否付费
         if ($thread->attachment_price > 0 && ! $thread->is_paid_attachment) {
-            throw new OrderException('order_post_not_found');
+            $this->outPut(ResponseCode::RESOURCE_NOT_FOUND, trans('order.order_post_not_found'));
         }
 
         return $attachment;
+    }
+
+    protected function downloadFile($filePath, $fileName='', $header = [], $readBuffer = 1024, $allowExt = ['jpeg', 'jpg', 'peg', 'gif', 'zip'])
+    {
+        //检测下载文件是否存在 并且可读
+        if (!is_file($filePath) && !is_readable($filePath)) {
+            $this->outPut(ResponseCode::RESOURCE_NOT_FOUND, '');
+        }
+        //检测文件类型是否允许下载
+        $ext = strtolower(pathinfo($filePath, PATHINFO_EXTENSION));
+        if (!in_array($ext, $allowExt)) {
+            $this->outPut(ResponseCode::UNAUTHORIZED, '');
+        }
+        //判读文件名是否为空
+        if (!$fileName) {
+            $fileName = basename($filePath);
+        }
+        //设置头信息
+        //声明浏览器输出的是字节流
+        $contentType = isset($header['Content-Type']) ? $header['Content-Type'] : 'application/octet-stream';
+        header('Content-Type: ' . $contentType);
+        //声明浏览器返回大小是按字节进行计算
+        header('Accept-Ranges:bytes');
+        //告诉浏览器文件的总大小
+        $fileSize = filesize($filePath);//坑 filesize 如果超过2G 低版本php会返回负数
+        header('Content-Length:' . $fileSize); //注意是'Content-Length:' 非Accept-Length
+        $contentDisposition = isset($header['Content-Disposition']) ? $header['Content-Disposition'] : 'attachment;filename=' . $fileName;
+        //声明下载文件的名称
+        header('Content-Disposition:' . $contentDisposition);//声明作为附件处理和下载后文件的名称
+        //获取文件内容
+        $handle = fopen($filePath, 'rb');//二进制文件用‘rb’模式读取
+
+        while (!feof($handle)) { //循环到文件末尾 规定每次读取（向浏览器输出为$readBuffer设置的字节数）
+            echo fread($handle, $readBuffer);
+        }
+        fclose($handle);//关闭文件句柄
+        exit;
     }
 }

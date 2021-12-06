@@ -18,65 +18,63 @@
 
 namespace App\Api\Controller\Category;
 
-use App\Api\Serializer\CategorySerializer;
-use App\Commands\Category\DeleteCategory;
-use Discuz\Api\Controller\AbstractListController;
-use Discuz\Auth\AssertPermissionTrait;
+use App\Common\CacheKey;
+use App\Models\AdminActionLog;
+use App\Models\Category;
+use App\Common\ResponseCode;
+use Discuz\Base\DzqAdminController;
+use App\Repositories\UserRepository;
 use Discuz\Auth\Exception\PermissionDeniedException;
-use Illuminate\Contracts\Bus\Dispatcher;
-use Illuminate\Support\Arr;
-use Psr\Http\Message\ServerRequestInterface;
-use Tobscure\JsonApi\Document;
+use Discuz\Base\DzqCache;
 
-class BatchDeleteCategoriesController extends AbstractListController
+class BatchDeleteCategoriesController extends DzqAdminController
 {
-    use AssertPermissionTrait;
-
-    /**
-     * {@inheritdoc}
-     */
-    public $serializer = CategorySerializer::class;
-
-    /**
-     * @var Dispatcher
-     */
-    protected $bus;
-
-    /**
-     * @param Dispatcher $bus
-     */
-    public function __construct(Dispatcher $bus)
+    protected function checkRequestPermissions(UserRepository $userRepo)
     {
-        $this->bus = $bus;
+        if (!$this->user->isAdmin()) {
+            throw new PermissionDeniedException('您没有删除分类权限');
+        }
+        return true;
     }
 
-    /**
-     * {@inheritdoc}
-     */
-    protected function data(ServerRequestInterface $request, Document $document)
+    public function main()
     {
-        $this->assertAdmin($request->getAttribute('actor'));
-        $ids = explode(',', Arr::get($request->getQueryParams(), 'ids'));
-        $actor = $request->getAttribute('actor');
+        $idString  = $this->inPut('id');
+        if (empty($idString)) {
+            $this->outPut(ResponseCode::INTERNAL_ERROR, '未获取到必要参数', '');
+        }
+        $ids = explode(',', $idString);
 
-        $result = ['data' => [], 'meta' => []];
-
-        $ids = array_flip($ids);
-        $ids = array_keys($ids);
-        $ids = array_reverse($ids);
-
-        foreach ($ids as $id) {
-            try {
-                $result['data'][] = $this->bus->dispatch(
-                    new DeleteCategory($id, $actor)
-                );
-            } catch (\Exception $e) {
-                $result['meta'][] = ['id' => $id, 'message' => $e->getMessage()];
-            }
+        // 批量添加的限制
+        if (count($ids) > 100) {
+            $this->outPut(ResponseCode::INTERNAL_ERROR, '批量添加超过限制', '');
         }
 
-        $document->setMeta($result['meta']);
+        foreach ($ids as $id) {
+            if ($id < 1) {
+                $this->outPut(ResponseCode::INVALID_PARAMETER, '', '');
+            }
+        }
+        $categoryDatas = Category::query()->whereIn('id', $ids)->get();
+        $categoryModel = new Category();
+        $categoryDatas->map(function ($category) use ($categoryModel) {
+            if ($categoryModel->hasThreads($category->id, 'normal')) {
+                $this->outPut(ResponseCode::INTERNAL_ERROR, '无法删除存在主题的分类', '分类名：' . $category->name);
+            } else {
+                AdminActionLog::createAdminActionLog(
+                    $this->user->id,
+                    AdminActionLog::ACTION_OF_CATEGORY,
+                    '删除内容分类【'. $category->name .'】'
+                );
+                $category->delete();
+            }
+        });
 
-        return $result['data'];
+        $this->outPut(ResponseCode::SUCCESS, '', '');
+    }
+
+    public function suffixClearCache($user)
+    {
+        DzqCache::delKey(CacheKey::CATEGORIES);
     }
 }

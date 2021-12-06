@@ -41,6 +41,9 @@ class SettingListener
         // Qcloud Services
         $events->listen(Saving::class, CheckCaptcha::class);                    // 腾讯云验证码
         $events->listen(Saving::class, CheckCos::class);                        // 腾讯云对象存储 COS
+        $events->listen(Saving::class, CheckCdn::class);                        // 腾讯云cdn
+
+        $events->listen(Saving::class, CheckAttachment::class);                 // 附件设置
 
         // When the settings are saved
         $events->listen(Saved::class, ClearDisabledPermission::class);

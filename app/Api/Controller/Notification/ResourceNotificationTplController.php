@@ -18,52 +18,26 @@
 
 namespace App\Api\Controller\Notification;
 
-use App\Api\Serializer\NotificationTplSerializer;
+use App\Common\ResponseCode;
 use App\Models\NotificationTpl;
-use Discuz\Api\Controller\AbstractListController;
-use Discuz\Auth\AssertPermissionTrait;
-use Discuz\Contracts\Setting\SettingsRepository;
+use Discuz\Base\DzqAdminController;
 use Discuz\Wechat\EasyWechatTrait;
-use Illuminate\Support\Arr;
-use Psr\Http\Message\ServerRequestInterface;
-use Tobscure\JsonApi\Document;
 
-class ResourceNotificationTplController extends AbstractListController
+class ResourceNotificationTplController extends DzqAdminController
 {
-    use AssertPermissionTrait;
+    use NotificationTrait;
+
     use EasyWechatTrait;
 
-    /**
-     * {@inheritdoc}
-     */
-    public $serializer = NotificationTplSerializer::class;
-
-    protected $settings;
-
-    /**
-     * WechatChannel constructor.
-     *
-     * @param SettingsRepository $settings
-     */
-    public function __construct(SettingsRepository $settings)
+    public function main()
     {
-        $this->settings = $settings;
-    }
-
-    /**
-     * @param ServerRequestInterface $request
-     * @param Document $document
-     * @return mixed
-     * @throws \Discuz\Auth\Exception\PermissionDeniedException
-     */
-    protected function data(ServerRequestInterface $request, Document $document)
-    {
-        $type_name = Arr::get($request->getQueryParams(), 'type_name');
+        $type_name = $this->inPut('typeName');
+        $type = $this->inPut('type');
 
         $tpl = NotificationTpl::query();
 
-        $tpl->when(Arr::has($request->getQueryParams(), 'type'), function ($query) use ($request) {
-            $query->where('type', (int) Arr::get($request->getQueryParams(), 'type'));
+        $tpl->when($type != '', function ($query) use ($type) {
+            $query->where('type', $type);
         });
 
         $typeNames = explode(',', $type_name);
@@ -87,6 +61,16 @@ class ResourceNotificationTplController extends AbstractListController
             });
         }
 
-        return $data;
+        $res = $this->getDefaultAttributes($data);
+        $arr = [];
+        foreach ($res as $k => $v) {
+            $arr[$k] = $v['templateVariables'];
+        }
+        $res = $this->camelData($this->getDefaultAttributes($data));
+        foreach ($res as $k => &$v) {
+            $v['templateVariables'] = $arr[$k];
+        }
+
+        $this->outPut(ResponseCode::SUCCESS, '', $res);
     }
 }

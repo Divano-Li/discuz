@@ -18,14 +18,16 @@
 
 namespace App\Models;
 
+use App\Censor\Censor;
 use App\Common\AuthUtils;
 use App\Common\CacheKey;
-use App\Common\Utils;
 use App\Common\ResponseCode;
 use App\Traits\Notifiable;
 use Carbon\Carbon;
 use Discuz\Auth\Guest;
+use Discuz\Base\DzqCache;
 use Discuz\Base\DzqModel;
+use Discuz\Common\Utils;
 use Discuz\Contracts\Setting\SettingsRepository;
 use Discuz\Database\ScopeVisibilityTrait;
 use Discuz\Foundation\EventGeneratorTrait;
@@ -45,6 +47,7 @@ use Illuminate\Support\Str;
  * @property int $id
  * @property int $sex
  * @property string $username
+ * @property string $nickname
  * @property string $mobile
  * @property string $password
  * @property string $pay_password
@@ -87,7 +90,9 @@ use Illuminate\Support\Str;
 class User extends DzqModel
 {
     use EventGeneratorTrait;
+
     use ScopeVisibilityTrait;
+
     use Notifiable;
 
     /**
@@ -127,16 +132,23 @@ class User extends DzqModel
     ];
 
     const STATUS_NORMAL = 0;//正常
+
     const STATUS_BAN = 1;//禁用
+
     const STATUS_MOD = 2;//审核中
+
     const STATUS_REFUSE = 3;//审核不通过
+
     const STATUS_IGNORE = 4;//审核忽略
+
     const STATUS_NEED_FIELDS = 10;//待填写扩展审核字段
 
     /*
      * 姓名和身份证号一致
      */
     const NAME_ID_NUMBER_MATCH = 0;
+
+    const SUPER_ADMINISTRATOR = 1;
 
     public static $statusMap = [
         self::STATUS_NORMAL => '正常',
@@ -413,10 +425,11 @@ class User extends DzqModel
         return static::$hasher->check($password, $this->pay_password);
     }
 
-    public function checkWalletPay(){
-        if($this->pay_password){
+    public function checkWalletPay()
+    {
+        if ($this->pay_password) {
             return true;
-        }else{
+        } else {
             return false;
         }
     }
@@ -538,11 +551,11 @@ class User extends DzqModel
         if (empty($value)) {
             return $value;
         }
-        $backUrl = str_replace($dir1.'/'.$dir2.'/'.$dir3.'/',$dir1.'/'.$dir2.'/'.$dir3.'/'.'original_',$value);
+        $backUrl = str_replace($dir1.'/'.$dir2.'/'.$dir3.'/', $dir1.'/'.$dir2.'/'.$dir3.'/'.'original_', $value);
         if (strpos($value, '://') === false) {
             return app(UrlGenerator::class)->to('/storage/background/' . $backUrl);
         }
-        $originalBackground = str_replace('cos://','',$backUrl);
+        $originalBackground = str_replace('cos://', '', $backUrl);
 
         /** @var SettingsRepository $settings */
         $settings = app(SettingsRepository::class);
@@ -587,7 +600,6 @@ class User extends DzqModel
         $this->thread_count = $this->threads()
             ->where('is_approved', Thread::APPROVED)
             ->where('is_draft', Thread::IS_NOT_DRAFT)
-            ->where('is_display', Thread::BOOL_YES)
             ->whereNull('deleted_at')
             ->count();
 
@@ -667,7 +679,7 @@ class User extends DzqModel
      */
     public function refreshUserFollow()
     {
-        $this->follow_count = UserFollow::query()->where('from_user_id',$this->id)->groupBy("to_user_id")->get("to_user_id")->count();
+        $this->follow_count = UserFollow::query()->where('from_user_id', $this->id)->groupBy('to_user_id')->get('to_user_id')->count();
         return $this;
     }
 
@@ -677,7 +689,7 @@ class User extends DzqModel
      */
     public function refreshUserFans()
     {
-        $this->fans_count = UserFollow::query()->where('to_user_id',$this->id)->groupBy("from_user_id")->get("from_user_id")->count();
+        $this->fans_count = UserFollow::query()->where('to_user_id', $this->id)->groupBy('from_user_id')->get('from_user_id')->count();
         return $this;
     }
 
@@ -689,12 +701,11 @@ class User extends DzqModel
     {
         $this->liked_count = $this->postUser()
             ->join('posts', 'post_user.post_id', '=', 'posts.id')
-            ->join('threads','posts.thread_id','=','threads.id')
+            ->join('threads', 'posts.thread_id', '=', 'threads.id')
             ->where('posts.is_first', true)
             ->where('posts.is_approved', Post::APPROVED)
             ->whereNull('posts.deleted_at')
             ->whereNotNull('threads.user_id')
-            ->where('threads.is_display',Thread::BOOL_YES)
             ->where('threads.is_sticky', Thread::BOOL_NO)
             ->where('threads.is_draft', Thread::IS_NOT_DRAFT)
             ->count();
@@ -1114,6 +1125,7 @@ class User extends DzqModel
         }
         return false;
     }
+
     public function getUserName($userId)
     {
         $user = self::query()->find($userId);
@@ -1123,8 +1135,69 @@ class User extends DzqModel
         return $user->username;
     }
 
-    protected function clearCache()
+    public function clearSomeCache()
     {
-        \Discuz\Base\DzqCache::delHashKey(CacheKey::LIST_THREADS_V3_USERS, $this->id);
+        DzqCache::delKey(CacheKey::DZQ_LOGIN_IN_USER_BY_ID.$this->id);
+    }
+
+    public static function checkName($checkField = '', $fieldValue = '', $isThrow = true, $removeId = 0, $isAutoRegister = false)
+    {
+        $allowFields = [
+            'username' => '用户名',
+            'nickname' => '昵称'
+        ];
+        $res = [
+            'field' => $checkField,
+            'value' => $fieldValue,
+            'errorCode' => 0,
+            'errorMsg' => ''
+        ];
+
+        if (!in_array($res['field'], array_keys($allowFields))) {
+            $res['errorCode'] = ResponseCode::INVALID_PARAMETER;
+            $res['errorMsg'] = '未被允许的检测字段';
+            return $res;
+        }
+
+        //去除字符串中空格
+        $res['value'] = preg_replace('/\s/ui', '', $res['value']);
+
+        //敏感词检测
+        $censor = app()->make(Censor::class);
+        $res['value'] = $censor->checkText($res['value'], $res['field']);
+
+        //重名校验
+        $query = self::query()->where($res['field'], $res['value']);
+        if (!empty($removeId)) {
+            $query->where('id', '<>', $removeId);
+        }
+        $exists = $query->exists();
+
+        if ($isAutoRegister == false) {
+            //长度检查
+            if (strlen($res['value']) == 0) {
+                $res['errorCode'] = ResponseCode::USERNAME_NOT_NULL;
+                $res['errorMsg'] = $allowFields[$res['field']].'不能为空';
+            } elseif (mb_strlen($res['value'], 'UTF8') > 15) {
+                $res['errorCode'] = ResponseCode::NAME_LENGTH_ERROR;
+                $res['errorMsg'] = $allowFields[$res['field']].'长度超过15个字符';
+            } elseif (!empty($exists)) {
+                //重名检测
+                $res['errorCode'] = ResponseCode::USERNAME_HAD_EXIST;
+                $res['errorMsg'] = $allowFields[$res['field']].'已经存在';
+            }
+        } else {
+            if (!empty($exists)) {
+                $res['value'] = $res['field'] == 'username'
+                    ? self::addStringToUsername($res['value'])
+                    : self::addStringToNickname($res['value']);
+            }
+        }
+
+        if ($isThrow == true && $res['errorCode'] != 0) {
+            Utils::outPut($res['errorCode'], $res['errorMsg']);
+        }
+
+        return $res;
     }
 }

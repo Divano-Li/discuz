@@ -43,6 +43,7 @@ use Illuminate\Database\ConnectionInterface;
 class CountLikedMakeRedPacket
 {
     use AssertPermissionTrait;
+
     use EventsDispatchTrait;
 
     /**
@@ -85,13 +86,12 @@ class CountLikedMakeRedPacket
      * @param User $clickLikeUser   //点赞用户
      * @param Post $post            //被点赞的回复
      */
-    public function __construct(User $threadUser,User $beLikeUser,User $clickLikeUser,Post $post)
+    public function __construct(User $threadUser, User $beLikeUser, User $clickLikeUser, Post $post)
     {
         $this->threadUser = $threadUser;
         $this->beLikeUser = $beLikeUser;
         $this->clickLikeUser = $clickLikeUser;
         $this->post = $post;
-
     }
 
     /**
@@ -117,8 +117,8 @@ class CountLikedMakeRedPacket
                             ',post_id:'        . $this->post->id.
                             ',msg:';
 
-        $redPacketTom = ThreadTom::query()->where('thread_id',$thread['id'])
-            ->where('tom_type',TomConfig::TOM_REDPACK)
+        $redPacketTom = ThreadTom::query()->where('thread_id', $thread['id'])
+            ->where('tom_type', TomConfig::TOM_REDPACK)
             ->first();
         if (!$redPacketTom) {
             $this->outDebugInfo('点赞领红包：该帖不为红包贴');
@@ -133,7 +133,9 @@ class CountLikedMakeRedPacket
             return;
         }
 
+        $compareTime = date('Y-m-d H:i:s', time() - RedPacket::EXPIRE_TIME);
         $redPacket = RedPacket::query() ->where(['thread_id' => $thread['id'], 'status' => RedPacket::RED_PACKET_STATUS_VALID, 'condition' => 1])
+                                        ->where('created_at', '>', $compareTime)
                                         ->first();
         if (empty($redPacket) || empty($redPacket['remain_money']) || empty($redPacket['remain_number'])) {
             $this->outDebugInfo('点赞领红包：该红包帖无剩余金额和个数');
@@ -162,8 +164,7 @@ class CountLikedMakeRedPacket
             return;
         }
 
-        $this->bus->dispatch(new ReceiveRedPacket($thread,$post,$redPacket,$this->threadUser,$this->beLikeUser));
-
+        $this->bus->dispatch(new ReceiveRedPacket($thread, $post, $redPacket, $this->threadUser, $this->beLikeUser));
     }
 
     public function outDebugInfo($info)

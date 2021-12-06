@@ -2,8 +2,8 @@
 /**
  *@OA\Get(
  *    path = "/api/v3/users.list",
- *    summary = "发布与展示",
- *    description = "Discuz! Q 表情列表",
+ *    summary = "用户列表",
+ *    description = "Discuz! Q 用户列表",
  *    tags ={"发布与展示"},
  *@OA\Parameter(ref = "#/components/parameters/bear_token"),
  *@OA\Parameter(ref = "#/components/parameters/page"),
@@ -28,7 +28,6 @@
  *                    @OA\Schema(title="用户列表", description="用户列表", @OA\Property(property="pageData", type="array", @OA\Items(type="object",
  *                      @OA\Property(property = "avatar", type = "string", description = "用户头像url"),
  *                      @OA\Property(property = "userId", type = "integer", description = "用户id"),
- *                      @OA\Property(property = "username", type = "string", description = "用户名称"),
  *                      @OA\Property(property = "nickname", type = "string", description = "用户所属组"),
  *                      @OA\Property(property = "groupName", type = "string", description = "话题引用帖子数量"),
  *                      @OA\Property(property = "followCount", type = "integer", description = "关注数"),
@@ -37,6 +36,7 @@
  *                      @OA\Property(property = "likedCount", type = "integer", description = "点赞数"),
  *                      @OA\Property(property = "questionCount", type = "integer", description = "问题数"),
  *                      @OA\Property(property = "threadCount", type = "integer", description = "主题数"),
+ *                      @OA\Property(property = "level", type = "integer", description = "用户层级"),
  *                    )))
  *                }))
  *            }

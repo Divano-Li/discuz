@@ -45,10 +45,12 @@ trait PostNoticesTrait
     public function postNotices(Post $post, User $actor, $type, $message = '')
     {
         // 无需给自己发送通知
-        if ($post->user_id == $actor->id) {
-            return;
-        }
+        // if ($post->user_id == $actor->id) {
+        //     return;
+        // }
         $message = $message ?: '无';
+        $oldContent = $post->content;
+        $post = Post::changeNotifitionPostContent($post);
 
         switch ($type) {
             case 'isApproved':  // 内容审核通知
@@ -58,6 +60,8 @@ trait PostNoticesTrait
                 $this->postIsDeleted($post, $actor, ['refuse' => $message]);
                 break;
         }
+        unset($post->isChange);
+        $post->content = $oldContent;
     }
 
     /**
@@ -115,7 +119,7 @@ trait PostNoticesTrait
             if ($post->is_approved == Post::UNAPPROVED) {
                 return;
             }
-            $user->notify(new Related($user, $post));
+            $user->notify(new Related($actor, $post));
         });
     }
 
@@ -128,7 +132,6 @@ trait PostNoticesTrait
      */
     private function postIsDeleted($post, $actor, array $attach)
     {
-        $post = Post::changeNotifitionPostContent($post);
         $data = [
             'message' => $post->formatContent(), // 解析表情
             'post' => $post,
@@ -160,17 +163,36 @@ trait PostNoticesTrait
             $data = array_merge($data, ['notify_type' => Post::NOTIFY_APPROVED_TYPE]);
 
             // 发送回复人的主题通知 (回复自己主题不发送通知)
-            if ($post->user_id != $post->thread->user_id) {
+            if (
+                $post->user_id != $post->thread->user_id
+                && is_null($post->reply_post_id)
+                && is_null($post->comment_post_id)
+            ) {
                 // Tag 发送通知
                 $post->thread->user->notify(new Replied($actor, $post, ['notify_type' => 'notify_approved']));
+            }
+
+            if (is_null($post->comment_post_id)) {
+                // 二级回复通知
+                if ($post->reply_post_id && $post->reply_user_id != $actor->id) {
+                    $post->replyUser->notify(new Replied($actor, $post, ['notify_type' => 'notify_reply_post']));
+                }
+            } else {
+                // 三级回复通知
+                if ($post->reply_post_id && $post->comment_user_id != $actor->id) {
+                    $post->commentUser->notify(new Replied($actor, $post, ['notify_type' => 'notify_comment_post']));
+                }
             }
         } elseif ($post->is_approved == 2) {
             // 忽略就发送不通过通知
             $data = array_merge($data, ['notify_type' => Post::NOTIFY_UNAPPROVED_TYPE]);
         }
 
-        // Tag 发送通知
-        $post->user->notify(new System(PostMessage::class, $actor, $data));
+        // Tag 发送通知，无需给自己发送审核通知
+        if ($post->user_id != $actor->id) {
+            $post->user->notify(new System(PostMessage::class, $actor, $data));
+        }
+
     }
 
     /**

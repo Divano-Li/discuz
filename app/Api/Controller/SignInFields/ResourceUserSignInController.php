@@ -17,22 +17,27 @@
 
 namespace App\Api\Controller\SignInFields;
 
-
-use App\Api\Serializer\UserSignInSerializer;
+use App\Common\ResponseCode;
 use App\Models\UserSignInFields;
-use Discuz\Api\Controller\AbstractResourceController;
-use Illuminate\Support\Arr;
-use Psr\Http\Message\ServerRequestInterface;
-use Tobscure\JsonApi\Document;
+use Discuz\Base\DzqAdminController;
 
-class ResourceUserSignInController extends AbstractResourceController
+class ResourceUserSignInController extends DzqAdminController
 {
-    public $serializer = UserSignInSerializer::class;
-    protected function data(ServerRequestInterface $request, Document $document)
+    protected $paramsAlias = ['uid' => 'userId'];
+
+    public function main()
     {
-        $actor = $request->getAttribute('actor');
-        $params = $request->getQueryParams();
-        $userId = Arr::get($params, 'id');
-        return UserSignInFields::instance()->getUserRecordFields($userId);
+        $userId = $this->inPut('uid');//推荐使用userId参数
+
+        if (empty($userId)) {
+            $this->outPut(ResponseCode::RESOURCE_NOT_FOUND, 'id不能为空');
+        }
+
+        $list = UserSignInFields::instance()->getUserRecordFields($userId);
+
+        $data =$this->camelData($list);
+
+        $this->outPut(ResponseCode::SUCCESS, '', $data);
     }
+
 }

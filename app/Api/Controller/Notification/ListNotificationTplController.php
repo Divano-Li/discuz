@@ -18,74 +18,28 @@
 
 namespace App\Api\Controller\Notification;
 
-use App\Api\Serializer\ArraySerializer;
+use App\Common\ResponseCode;
 use App\Models\NotificationTpl;
-use Discuz\Api\Controller\AbstractListController;
-use Discuz\Auth\AssertPermissionTrait;
-use Discuz\Http\UrlGenerator;
+use Discuz\Base\DzqAdminController;
 use Illuminate\Support\Collection;
-use Psr\Http\Message\ServerRequestInterface;
-use Tobscure\JsonApi\Document;
 
-class ListNotificationTplController extends AbstractListController
+class ListNotificationTplController extends DzqAdminController
 {
-    use AssertPermissionTrait;
-
-    /**
-     * @var string
-     */
-    public $serializer = ArraySerializer::class;
-
-    /**
-     * @var UrlGenerator
-     */
-    protected $url;
-
-    public function __construct(UrlGenerator $url)
+    public function main()
     {
-        $this->url = $url;
+        $page = $this->inPut('page');
+        $perPage = $this->inPut('perPage');
+
+        $tpl = NotificationTpl::all(['id', 'status', 'type', 'type_name', 'is_error', 'error_msg'])
+            ->groupBy('type_name');
+
+        $pageData = $this->specialPagination($page, $perPage, $tpl, false);
+
+        $pageData['pageData'] = $this->build($pageData['pageData']);
+
+        $this->outPut(ResponseCode::SUCCESS, '', $this->camelData($pageData));
     }
 
-    /**
-     * @param ServerRequestInterface $request
-     * @param Document $document
-     * @return NotificationTpl[]|\Illuminate\Database\Eloquent\Collection|mixed
-     * @throws \Discuz\Auth\Exception\PermissionDeniedException
-     * @throws \Tobscure\JsonApi\Exception\InvalidParameterException
-     */
-    protected function data(ServerRequestInterface $request, Document $document)
-    {
-        $this->assertAdmin($request->getAttribute('actor'));
-
-        $limit = $this->extractLimit($request);
-        $offset = $this->extractOffset($request);
-
-        $tpl = NotificationTpl::all(['id', 'status', 'type', 'type_name', 'is_error', 'error_msg'])->groupBy('type_name');
-
-        $total = $tpl->count();
-
-        $data = $tpl->skip($offset)->take($limit);
-
-        $document->addPaginationLinks(
-            $this->url->route('notification.tpl.list'),
-            $request->getQueryParams(),
-            $offset,
-            $limit,
-            $total
-        );
-
-        $document->setMeta([
-            'total' => $total,
-            'pageCount' => ceil($total / $limit),
-        ]);
-
-        return $this->build($data);
-    }
-
-    /**
-     * @param Collection $data
-     * @return Collection
-     */
     private function build(Collection $data)
     {
         return $data->map(function (Collection $item, $index) {
@@ -96,6 +50,7 @@ class ListNotificationTplController extends AbstractListController
                 /** @var NotificationTpl $value */
                 if ($value->status) {
                     $build = [
+                        'id' => $value->id,
                         'status' => $value->status,
                         'type' => NotificationTpl::enumTypeName($value->type),
                         'is_error' => $value->is_error,
@@ -112,4 +67,3 @@ class ListNotificationTplController extends AbstractListController
         })->values();
     }
 }
-

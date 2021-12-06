@@ -18,74 +18,74 @@
 
 namespace App\Api\Controller\Threads;
 
-use App\Api\Serializer\ThreadVideoSerializer;
 use App\Commands\Thread\CreateThreadVideo;
+use App\Common\ResponseCode;
 use App\Models\Thread;
 use App\Models\ThreadVideo;
-use Discuz\Api\Controller\AbstractCreateController;
+use App\Repositories\UserRepository;
+use Discuz\Auth\Exception\PermissionDeniedException;
+use Discuz\Base\DzqController;
 use Illuminate\Contracts\Bus\Dispatcher;
 use Illuminate\Contracts\Validation\Factory;
-use Illuminate\Support\Arr;
-use Illuminate\Validation\ValidationException;
-use Psr\Http\Message\ServerRequestInterface;
-use Tobscure\JsonApi\Document;
-use App\Models\Category;
-use Discuz\Auth\AssertPermissionTrait;
 
-class CreateThreadVideoController extends AbstractCreateController
+class CreateThreadVideoController extends DzqController
 {
-    use AssertPermissionTrait;
-    /**
-     * {@inheritdoc}
-     */
-    public $serializer = ThreadVideoSerializer::class;
-
-    /**
-     * @var Dispatcher
-     */
     protected $bus;
 
     protected $validation;
 
-    /**
-     * @param Dispatcher $bus
-     * @param Factory $validation
-     */
-    public function __construct(Dispatcher $bus, Factory  $validation)
+    public $providers = [
+    ];
+
+    public function __construct(Dispatcher $bus, Factory $validation)
     {
         $this->bus = $bus;
         $this->validation = $validation;
     }
 
-    /**
-     * {@inheritdoc}
-     *
-     * @throws ValidationException
-     */
-    protected function data(ServerRequestInterface $request, Document $document)
+    protected function checkRequestPermissions(UserRepository $userRepo)
     {
-        $actor = $request->getAttribute('actor');
-
-        $attributes = Arr::get($request->getParsedBody(), 'data.attributes', []);
-
-        $type = (int) Arr::get($attributes, 'type', ThreadVideo::TYPE_OF_VIDEO);
-        if($type == 1){
-            $this->assertCan($actor, 'createThread.' . Thread::TYPE_OF_AUDIO);
-        }else{
-            $this->assertCan($actor, 'createThread.' . Thread::TYPE_OF_VIDEO);
+        $user = $this->user;
+        if ($this->user->isGuest()) {
+            throw new PermissionDeniedException('没有上传视频权限');
         }
+        $type = $this->inPut('type');
+        $type = ((int)$type) ?: ThreadVideo::TYPE_OF_VIDEO;
+        if ($type == 1) {
+            if (!$userRepo->canInsertAudioToThread($user)) {
+                throw new PermissionDeniedException('没有发帖插入音频权限');
+            }
+        } else {
+            if (!$userRepo->canInsertVideoToThread($user)) {
+                throw new PermissionDeniedException('没有发帖插入视频权限');
+            }
+        }
+        return true;
+    }
 
-        $this->validation->make($attributes, [
-            'file_id' => 'required',
-        ])->validate();
+    public function main()
+    {
+        $fileId = $this->inPut('fileId');
+        if (empty($fileId)) {
+            $this->outPut(ResponseCode::INVALID_PARAMETER);
+        }
+        $type = $this->inPut('type');
+        $type = (int)$type ? (int)$type: ThreadVideo::TYPE_OF_VIDEO;
 
-        return $this->bus->dispatch(
+        $media_url = $this->inPut('mediaUrl');
+
+        //驼峰改下划线，适应以前的方法
+        $data['attributes']['file_id'] = $fileId;
+        $data['attributes']['media_url'] = $media_url;
+        $result = $this->bus->dispatch(
             new CreateThreadVideo(
-                $actor,
+                $this->user,
                 new Thread,
                 $type,
-                $request->getParsedBody()->get('data', [])
+                $data
             )
         );
+        $result = $this->camelData($result);
+        $this->outPut(ResponseCode::SUCCESS, '', $result);
     }
 }

@@ -18,164 +18,99 @@
 
 namespace App\Api\Controller\Notification;
 
-use App\Api\Serializer\NotificationSerializer;
+use App\Common\ResponseCode;
+use App\Common\Utils;
+use App\Models\Post;
 use App\Models\Thread;
 use App\Models\User;
-use App\Repositories\NotificationRepository;
-use Discuz\Api\Controller\AbstractListController;
-use Discuz\Auth\AssertPermissionTrait;
-use Discuz\Http\UrlGenerator;
+use App\Repositories\UserRepository;
+use Discuz\Base\DzqController;
+use Illuminate\Notifications\DatabaseNotification;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Str;
-use Psr\Http\Message\ServerRequestInterface;
-use Tobscure\JsonApi\Document;
 
-class ListNotificationController extends AbstractListController
+class ListNotificationController extends DzqController
 {
-    use AssertPermissionTrait;
-
-    /**
-     * {@inheritdoc}
-     */
-    public $serializer = NotificationSerializer::class;
-
-    /**
-     * @var NotificationRepository
-     */
-    protected $notifications;
-
-    /**
-     * @var UrlGenerator
-     */
-    protected $url;
-
-    /**
-     * @var int|null
-     */
-    public $notificationCount;
-
-    /**
-     * @param NotificationRepository $notifications
-     * @param UrlGenerator $url
-     */
-    public function __construct(NotificationRepository $notifications, UrlGenerator $url)
+    protected function checkRequestPermissions(UserRepository $userRepo)
     {
-        $this->notifications = $notifications;
-        $this->url = $url;
+        $actor = $this->user;
+        if ($actor->isGuest()) {
+            $this->outPut(ResponseCode::JUMP_TO_LOGIN);
+        }
+        return true;
     }
 
-    /**
-     * @param ServerRequestInterface $request
-     * @param Document $document
-     * @return mixed
-     * @throws \Discuz\Auth\Exception\NotAuthenticatedException
-     * @throws \Tobscure\JsonApi\Exception\InvalidParameterException
-     */
-    protected function data(ServerRequestInterface $request, Document $document)
+    public function main()
     {
-        $actor = $request->getAttribute('actor');
-        $this->assertRegistered($actor);
+        $user = $this->user;
+        $filters = $this->inPut('filter') ?: [];
+        $page = $this->inPut('page') ?: 1;
+        $perPage = $this->inPut('perPage') ?: 10;
 
-        $filter = $this->extractFilter($request);
-        $limit = $this->extractLimit($request);
-        $offset = $this->extractOffset($request);
+        $pageData = $this->search($user, $filters, $perPage, $page);
+        $pageData['pageData'] = $pageData['pageData']->map(function (DatabaseNotification $i) {
+            return $this->formatData($i);
+        });
 
-        $notifications = $this->search($actor, $filter, $limit, $offset);
-
-        $document->addPaginationLinks(
-            $this->url->route('notification.list'),
-            $request->getQueryParams(),
-            $offset,
-            $limit,
-            $this->notificationCount
-        );
-
-        $document->setMeta([
-            'total' => $this->notificationCount,
-            'pageCount' => ceil($this->notificationCount / $limit),
-        ]);
-
-        return $notifications;
+        $this->outPut(ResponseCode::SUCCESS, '', $pageData);
     }
 
-    /**
-     * @param User $actor
-     * @param $filter
-     * @param null $limit
-     * @param int $offset
-     * @return mixed
-     */
-    public function search(User $actor, $filter, $limit = null, $offset = 0)
+    public function search(User $user, $filters, $perPage, $page)
     {
-        $type = Arr::get($filter, 'type');
+        $type = Arr::get($filters, 'type');
 
-        $query = $actor->notifications()
+        $query = $user->notifications()
             ->when($type, function ($query, $type) {
                 return $query->whereIn('type', explode(',', $type));
             });
+
         $query->orderBy('created_at', 'desc');
 
-        $this->notificationCount = $limit > 0 ? $query->count() : null;
-
-        $query->skip($offset)->take($limit);
+        $pageData = $this->pagination($page, $perPage, $query->getQuery(), false);
+        $data = $pageData['pageData'];
 
         // type markAsRead
-        $actor->unreadNotifications()->whereIn('type', explode(',', $type))->get()->markAsRead();
-
-        $data = $query->get();
+        $user->unreadNotifications()->whereIn('type', explode(',', $type))->get()->markAsRead();
 
         /**
          * 解决 N+1 问题
          * 获取主题&用户
          */
-        $this->getThreads($data, $type, $users, $threads);
+        [$users, $threads] = $this->getUsersAndThreads($data, $type);
 
         /**
          * 系统通知结构不一
          */
         if ($type != 'system') {
             // 获取通知里当前的用户名称和头像
-            $data->map(function ($item) use ($users, $threads, $actor, $type) {
+            $data->map(function ($item) use ($users, $threads, $user, $type) {
                 $user = $users->get(Arr::get($item->data, 'user_id'));
-                if (! empty($user)) {
+                if (!empty($user)) {
                     $item->user_name = $user->username;
                     $item->user_avatar = $user->avatar;
                     $item->realname = $user->realname;
+                    $item->nickname = $user->nickname;
                 }
-                // 判断是否是楼中楼，查询用户名
-                if (Arr::has($item->data, 'reply_post_user_id') && Arr::get($item->data, 'reply_post_user_id') != 0) {
-                    $replyPostUser = $users->get(Arr::get($item->data, 'reply_post_user_id'));
-                    if (! empty($replyPostUser)) {
-                        $item->reply_post_user_name = $replyPostUser->username;
-                    }
-                }
-
                 // 查询主题相关内容
-                if (! empty($threadID = Arr::get($item->data, 'thread_id', 0))) {
+                if (!empty($threadID = Arr::get($item->data, 'thread_id', 0))) {
                     // 获取主题作者用户组
-                    if (! empty($threads->get($threadID))) {
+                    if (!empty($threads->get($threadID))) {
+                        $item->is_reply = 0;
                         $thread = $threads->get($threadID);
+                        $item->thread_user_nickname = $thread->user->nickname;
+                        $item->thread_user_avatar = $thread->user->avatar;
                         $item->thread_type = $thread->type;
                         $item->thread_is_approved = $thread->is_approved;
-                        $item->thread_created_at = $thread->formatDate('created_at');
+                        $item->thread_created_at = $thread->created_at;
                         $threadUser = $thread->user;
-                        if (! empty($threadUser)) {
+                        if (!empty($threadUser)) {
                             $item->thread_username = $threadUser->username;
                             $item->thread_user_groups = $threadUser->groups->pluck('name')->join(',');
                             /**
                              * 判断是否是问答、匿名提问
                              * @var Thread $thread
                              */
-
-                            if (
-                                ($thread->type == Thread::TYPE_OF_QUESTION && ! empty($thread->question)) ||
-                                $thread->type == Thread::TYPE_OF_TEXT ||
-                                $thread->type == Thread::TYPE_OF_LONG ||
-                                $thread->type == Thread::TYPE_OF_IMAGE ||
-                                $thread->type == Thread::TYPE_OF_GOODS ||
-                                $thread->type == Thread::TYPE_OF_VIDEO ||
-                                $thread->type == Thread::TYPE_OF_AUDIO
-                            ) {
+                            if ($thread->type == Thread::TYPE_OF_QUESTION && !empty($thread->question)) {
                                 // 判断如果当前触发通知人又是匿名问答人，就准备匿名用户
                                 if ($user->id == $thread->user_id && $thread->is_anonymous) {
                                     // 判断如果是匿名人，但是不是推送的 问答提问通知、也不是财务通知，其余通知都不匿名
@@ -202,34 +137,49 @@ class ListNotificationController extends AbstractListController
                                 $item->thread_username = $thread->isAnonymousName();
                                 $item->thread_user_groups = '';
                             }
+                            //悬赏贴用户对象调整
+                            if ($item->type === 'threadrewarded') {
+                                $item->user_name = $threadUser->username;
+                                $item->user_avatar = $threadUser->avatar;
+                                $item->realname = $threadUser->realname;
+                                $item->nickname = $threadUser->nickname;
+                                $itemData = $item->data;
+                                $itemData['user_id'] = $threadUser->id;
+                                $item->data = $itemData;
+                            }
                         }
+                    }
+                }
+                // 判断是否是楼中楼，查询用户名
+                if (Arr::has($item->data, 'reply_post_user_id') && Arr::get($item->data, 'reply_post_user_id') != 0) {
+                    $replyPostUser = $users->get(Arr::get($item->data, 'reply_post_user_id'));
+                    if (!empty($replyPostUser)) {
+                        $item->reply_post_user_name = $replyPostUser->username;
+                        //如果是楼中楼，这里标识为1
+                        $item->is_reply = 1;
                     }
                 }
             });
         } else {
             // 获取通知里当前的用户名称和头像
-            $data->map(function ($item) use ($users, $threads, $actor) {
-                if (! empty($threadID = Arr::get($item, 'data.raw.thread_id', 0))) {
+            $data->map(function ($item) use ($users, $threads, $user) {
+                if (!empty($threadID = Arr::get($item, 'data.raw.thread_id', 0))) {
                     // 获取主题作者用户组
-                    if (! empty($threads->get($threadID))) {
+                    if (!empty($threads->get($threadID))) {
                         $thread = $threads->get($threadID);
                         $item->thread_is_approved = $thread->is_approved;
-                        $item->thread_created_at = $thread->formatDate('created_at');
+                        $item->thread_created_at = $thread->created_at;
                     }
                 }
             });
         }
 
-        return $data;
+        $pageData['pageData'] = $data;
+
+        return $pageData;
     }
 
-    /**
-     * @param $data
-     * @param $type
-     * @param $users
-     * @param $threads
-     */
-    protected function getThreads($data, $type, &$users, &$threads)
+    protected function getUsersAndThreads($data, $type)
     {
         if ($type == 'system') {
             $data->where('type', '=', $type);
@@ -258,5 +208,114 @@ class ListNotificationController extends AbstractListController
             array_push($with, 'question');
         }
         $threads = Thread::with($with)->whereIn('id', $threadIds)->get()->keyBy('id');
+
+        return [$users, $threads];
+    }
+
+    protected function formatData(DatabaseNotification $data)
+    {
+        $data->data = $this->changeNotificationData($data->data);
+        $result = array_merge([
+            'id' => $data->id,
+            'type' => $data->type,
+            'userId' => $data->notifiable_id,
+            'readAt' => optional($data->read_at)->format('Y-m-d H:i:s'),
+            'createdAt' => optional($data->created_at)->format('Y-m-d H:i:s'),
+        ], Utils::arrayKeysToCamel($data->data));
+
+        // 默认必须要有的字段
+        if (!array_key_exists('replyPostId', $result)) {
+            $result = array_merge($result, [
+                'replyPostId' => 0,
+            ]);
+        } else {
+            // 返回楼中楼数据
+            $result = array_merge($result, [
+                'replyPostUserName' => $data->reply_post_user_name,
+            ]);
+        }
+
+        // 新增单独赋值的字段值
+        $result = array_merge($result, [
+//            'username' => $data->user_name ?: '',
+            'userAvatar' => $data->user_avatar ?: '',
+            'nickname' => $data->nickname ?: '',
+            'isReal' => $this->getIsReal($data->realname),
+//            'threadUsername' => $data->thread_username ?: '',
+            'threadUserGroups' => $data->thread_user_groups ?: '',
+            'threadCreatedAt' => optional($data->thread_created_at)->format('Y-m-d H:i:s'),
+            'threadIsApproved' => $data->thread_is_approved ?: 0,
+            'threadUserNickname' => $data->thread_user_nickname ?: '',
+            'threadUserAvatar' => $data->thread_user_avatar ?: '',
+            'isReply'   =>  $data->is_reply ?: 0
+        ]);
+
+        // 判断是否要匿名
+        if (!empty($result['threadId'])) {
+            $thAnonymous = Thread::query()->where('id', $result['threadId'])->first(['id','is_anonymous']);
+            if (!empty($thAnonymous) && in_array($result['type'], ['threadrewarded']) && (bool)$thAnonymous->is_anonymous) {
+                $result['isReal'] = false; // 全部默认未认证
+                $result['isAnonymous'] = true;
+                $result['threadUsername'] = '匿名用户';
+                $result['threadUserNickname'] = '匿名用户';
+                $result['threadUserAvatar'] = '';
+            }
+        }
+
+        return $result;
+    }
+
+    protected function changeNotificationData($data)
+    {
+        if (isset($data['post_id']) && !empty($data['post_id'])) {
+            if (!strpos($data['post_content'], '[音视频]') &&
+               !strpos($data['post_content'], '[代码块]')) {
+                $data['post_content'] = Post::changeContent($data['post_content']);
+            }
+
+            $post = Post::query()->where('id', $data['post_id'])->first();
+            if ($post['is_first'] == Post::FIRST_YES) {
+                $data['post_content'] = Post::addTagToThreadContent($data['thread_id'], $data['post_content']);
+                if (!empty($data['thread_title'])) {
+                    $data['thread_title'] = Post::addTagToThreadContent($data['thread_id'], $data['thread_title']);
+                }
+            } else {
+                $data['post_content'] = Post::addTagToPostContent($data['post_id'], $data['post_content']);
+                if (!empty($data['thread_title'])) {
+                    $data['thread_title'] = Post::addTagToPostContent($data['post_id'], $data['thread_title']);
+                }
+            }
+        }
+        if (isset($data['reply_post_id']) && !empty($data['reply_post_id'])) {
+            $data['reply_post_content'] = Post::changeContent($data['reply_post_content']);
+            $data['reply_post_content'] = Post::addTagToPostContent($data['reply_post_id'], $data['reply_post_content']);
+        }
+
+        if (isset($data['amount']) && isset($data['thread_id'])) {
+            $data['content'] = Post::changeContent($data['content']);
+            $data['content'] = Post::addTagToThreadContent($data['thread_id'], $data['content']);
+            if (isset($data['thread_title']) && !empty($data['thread_title'])) {
+                $data['thread_title'] = Post::changeContent($data['thread_title']);
+                $data['thread_title'] = Post::addTagToThreadContent($data['thread_id'], $data['thread_title']);
+            }
+        }
+
+        return $data;
+    }
+
+    /**
+     * 是否实名认证
+     *
+     * @param $realname
+     *
+     * @return string
+     */
+    protected function getIsReal($realname)
+    {
+        if (isset($realname) && $realname != null) {
+            return true;
+        } else {
+            return false;
+        }
     }
 }
