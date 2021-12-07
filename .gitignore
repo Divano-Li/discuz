@@ -1,5 +1,6 @@
 /framework
-/vendor
+/vendor/*
+!/vendor/discuz
 /composer.lock
 /.idea
 /config/config.php
