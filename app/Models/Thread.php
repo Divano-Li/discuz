@@ -459,6 +459,21 @@ class Thread extends DzqModel
                 ->whereNotNull('user_id')
                 ->count() + 1;  // include first post
 
+
+        $temps = $this->posts()
+            ->where('is_first', false)
+            ->where('is_comment', false)
+            ->where('is_approved', Post::APPROVED)
+            ->whereNull('deleted_at')
+            ->whereNotNull('user_id')
+            ->pluck('reply_count');
+
+        $count = 0;
+        foreach ($temps as $t) {
+            $count = $count + $t;
+        }
+
+        $this->post_count = $this->post_count + $count;
         return $this;
     }
 

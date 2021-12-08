@@ -155,11 +155,11 @@ class PostListener
         $thread = $post->thread;
 
         // 刷新主题回复数、最后一条回复
-        if ($thread && $thread->exists) {
+        /*if ($thread && $thread->exists) {
             $thread->refreshPostCount();
             $thread->refreshLastPost();
             $thread->save();
-        }
+        }*/
 
         // 刷新被回复数
         if ($replyId = $post->reply_post_id) {
@@ -168,6 +168,12 @@ class PostListener
             $replyPost->timestamps = false;
             $replyPost->refreshReplyCount();
             $replyPost->save();
+        }
+        // 刷新主题回复数、最后一条回复
+        if ($thread && $thread->exists) {
+            $thread->refreshPostCount();
+            $thread->refreshLastPost();
+            $thread->save();
         }
     }
 
