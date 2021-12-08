@@ -333,6 +333,7 @@ class Censor
              * @see 图片内容安全文档 https://cloud.tencent.com/document/product/1125/53273
              */
             try {
+                $params['BizType'] = 'sex_allow';
                 $result = $this->app->make('qcloud')->service('ims')->ImageModeration($params);
             } catch (\Exception $e) {
                 DzqLog::error('tencent_cloud_check_image_error', [], $e->getMessage());

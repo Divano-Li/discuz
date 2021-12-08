@@ -30,6 +30,7 @@ class TmsService extends AbstractService
     public function TextModeration($content = '')
     {
         $clientRequest = new TextModerationRequest();
+        //此处是修改文字内容审核部分
         $clientRequest->fromJsonString(json_encode(['Content' => base64_encode($content), 'BizType' => 'text_allow']));
         return $this->client->TextModeration($clientRequest)->serialize();
     }

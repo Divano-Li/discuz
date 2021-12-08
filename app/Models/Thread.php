@@ -453,7 +453,7 @@ class Thread extends DzqModel
     {
         $this->post_count = $this->posts()
                 ->where('is_first', false)
-                ->where('is_comment', false)
+                //->where('is_comment', false)
                 ->where('is_approved', Post::APPROVED)
                 ->whereNull('deleted_at')
                 ->whereNotNull('user_id')
