@@ -42,6 +42,7 @@ class ViewCountController extends DzqController
         DzqCache::delHashKey(CacheKey::LIST_THREADS_V3_THREADS, $threadId);
         $viewCount = intval($thread->view_count+1);
         $thread->view_count = $viewCount;
+        $thread->timestamps = false;
         $thread->save();
 
         $this->outPut(ResponseCode::SUCCESS, '', ['viewCount' => $viewCount]);
